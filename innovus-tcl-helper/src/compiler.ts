@@ -1,30 +1,31 @@
 /**
- * TCL 编译引擎 — 跨文件变量追踪与符号表
+ * TCL compilation engine — cross-file variable tracking and symbol table
  *
- * 核心功能:
- *   1. 解析 .f 文件获取 TCL 脚本列表和加载顺序
- *   2. 按顺序编译每个 TCL 文件，构建全局符号表
- *   3. 追踪变量定义位置、值、引用位置
- *   4. 支持增量编译（文件变化时局部更新）
- *   5. 处理 source 命令的嵌套文件包含
+ * Core features:
+ *   1. Parse the .f file to get the list of TCL scripts and their load order
+ *   2. Compile every TCL file in order and build the global symbol table
+ *   3. Track the definition site, value and references of every variable
+ *   4. Support incremental compilation (partial update when a file changes)
+ *   5. Handle nested file inclusion through the source command
  *
- * 符号表:
+ * Symbol table:
  *   SymbolTable:
  *     variables: Map<varName, VariableInfo[]>
- *       每个变量可能有多个定义（不同文件/行），按文件顺序排列
+ *       a variable may have several definitions (different files/lines), ordered by file
  *
  *   VariableInfo:
- *     name: 变量名
- *     value: 解析后的值（简单值）
- *     rawValue: 原始值文本
- *     filePath: 定义所在文件
- *     line: 定义行号
- *     column: 定义列号
- *     isResolved: 值是否已完全解析（不含未解析的变量引用）
+ *     name: the variable name
+ *     value: the resolved (simple) value
+ *     rawValue: the raw value text
+ *     filePath: the file holding the definition
+ *     line: the definition line
+ *     column: the definition column
+ *     isResolved: whether the value is fully resolved (no unresolved variable references)
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { t } from './i18n';
 import {
     parse, ParseResult, AstNode,
     SetNode, VarRefNode, SourceNode, ProcNode,
@@ -33,24 +34,24 @@ import {
 } from './tcl-ast';
 
 // ════════════════════════════════════════════════════════════
-//  类型定义
+//  Type definitions
 // ════════════════════════════════════════════════════════════
 
-/** 变量信息 */
+/** Variable information */
 export interface VariableInfo {
     name: string;
-    value: string;             // 解析后的简单值
-    rawValue: string;          // 原始值文本
-    filePath: string;          // 定义所在文件的绝对路径
-    relativePath: string;      // 相对工作区根目录的路径
+    value: string;             // the resolved simple value
+    rawValue: string;          // the raw value text
+    filePath: string;          // absolute path of the file holding the definition
+    relativePath: string;      // path relative to the workspace root
     line: number;              // 1-based
     column: number;            // 1-based
-    order: number;             // 在编译顺序中的序号（越小越早）
-    isResolved: boolean;       // 值是否已完全解析
-    rawText: string;           // 原始 set 命令文本
+    order: number;             // index in the compilation order (lower = earlier)
+    isResolved: boolean;       // whether the value is fully resolved
+    rawText: string;           // the raw set command text
 }
 
-/** 变量引用信息 */
+/** Variable reference information */
 export interface VariableRefInfo {
     name: string;
     filePath: string;
@@ -58,14 +59,14 @@ export interface VariableRefInfo {
     line: number;
     column: number;
     rawText: string;
-    definition: VariableInfo | null;  // 解析到的定义
+    definition: VariableInfo | null;  // the definition it resolved to
 }
 
-/** 编译单元（一个 TCL 文件） */
+/** Compilation unit (one TCL file) */
 export interface CompilationUnit {
-    filePath: string;           // 绝对路径
-    relativePath: string;       // 相对路径
-    order: number;              // 编译顺序
+    filePath: string;           // absolute path
+    relativePath: string;       // relative path
+    order: number;              // compilation order
     parseResult: ParseResult;
     sets: SetNode[];
     varRefs: VarRefNode[];
@@ -73,15 +74,15 @@ export interface CompilationUnit {
     procs: ProcNode[];
 }
 
-/** 编译结果 */
+/** Compilation result */
 export interface CompileResult {
     workspaceRoot: string;
-    fFilePath: string;          // .f 文件的绝对路径
-    units: CompilationUnit[];   // 按编译顺序排列
-    variables: Map<string, VariableInfo[]>;  // 全局变量表
-    variableRefs: VariableRefInfo[];          // 所有变量引用
-    errors: CompileError[];     // 编译错误
-    warnings: CompileWarning[]; // 编译警告
+    fFilePath: string;          // absolute path of the .f file
+    units: CompilationUnit[];   // ordered by compilation order
+    variables: Map<string, VariableInfo[]>;  // the global variable table
+    variableRefs: VariableRefInfo[];          // every variable reference
+    errors: CompileError[];     // compilation errors
+    warnings: CompileWarning[]; // compilation warnings
 }
 
 export interface CompileError {
@@ -99,18 +100,18 @@ export interface CompileWarning {
 }
 
 // ════════════════════════════════════════════════════════════
-//  命令变量提取 — TCL 命令隐式定义的变量
+//  Command variable extraction — variables implicitly defined by TCL commands
 // ════════════════════════════════════════════════════════════
 
 /**
- * 从 TCL 命令中提取隐式定义的变量名（foreach、lassign、gets、catch、scan 等），
- * 并将其添加到符号表。
+ * Extract the variable names implicitly defined by a TCL command
+ * (foreach, lassign, gets, catch, scan, ...) and add them to the symbol table.
  *
- * @param cmd       - 解析后的命令节点
- * @param unit      - 当前编译单元
- * @param line      - 命令所在行号（已偏移处理）
- * @param column    - 命令所在列号
- * @param variables - 符号表（原地修改）
+ * @param cmd       - the parsed command node
+ * @param unit      - the current compilation unit
+ * @param line      - the line of the command (already offset)
+ * @param column    - the column of the command
+ * @param variables - the symbol table (modified in place)
  */
 function addCmdDefinedVars(
     cmd: CommandNode,
@@ -122,7 +123,7 @@ function addCmdDefinedVars(
     const cmdName = cmd.commandName;
     const args = cmd.args;
 
-    /** 添加一个变量定义的便捷方法 */
+    /** Convenience helper that records one variable definition */
     const addVar = (varName: string, source: string): void => {
         if (!varName || varName.startsWith('-')) { return; }
         const info: VariableInfo = {
@@ -170,7 +171,7 @@ function addCmdDefinedVars(
     }
 
     // ── gets channelId ?varname? ──
-    // 如果提供第二个参数，该变量接收读取的一行数据
+    // When a second argument is given, that variable receives the line that was read
     if (cmdName === 'gets' && args.length >= 2) {
         const varArg = args[1];
         if (varArg.type === TokenType.WORD) {
@@ -180,9 +181,9 @@ function addCmdDefinedVars(
     }
 
     // ── catch script ?resultVar? ?optionsVar? ──
-    // 从第 2 个参数开始是变量名（先跳过花括号的 script body）
+    // The variable names start at the second argument (skipping the braced script body)
     if (cmdName === 'catch' && args.length >= 2) {
-        // 跳过第一个参数（script），后续参数为变量名
+        // Skip the first argument (the script); the rest are variable names
         for (let ai = 1; ai < args.length; ai++) {
             if (args[ai].type === TokenType.WORD) {
                 addVar(args[ai].value, 'catch');
@@ -192,7 +193,7 @@ function addCmdDefinedVars(
     }
 
     // ── scan string format var1 var2 ... ──
-    // 前两个参数是字符串和格式，后续为接收扫描结果的变量
+    // The first two arguments are the string and the format; the rest receive the scan results
     if (cmdName === 'scan' && args.length >= 3) {
         for (let ai = 2; ai < args.length; ai++) {
             if (args[ai].type === TokenType.WORD) {
@@ -204,24 +205,25 @@ function addCmdDefinedVars(
 }
 
 /**
- * 获取控制流命令的 body 花括号 token 索引列表。
- * 用于递归解析嵌套的代码块（if/while/for/foreach/switch 体及其 init/incr 块）。
+ * Get the indices of the braced body tokens of a control-flow command.
+ * Used to recursively parse nested code blocks (the if/while/for/foreach/switch
+ * bodies and the for init/incr blocks).
  *
- * @returns 参数数组中属于可执行代码花括号的索引
+ * @returns the indices in the argument array that hold executable code braces
  */
 function getControlFlowBodyIndices(cmdName: string, args: CommandNode['args']): number[] {
     const indices: number[] = [];
 
     switch (cmdName) {
         case 'foreach':
-            // foreach varname list body → args[2] 是 body
+            // foreach varname list body → args[2] is the body
             if (args.length >= 3 && args[2].type === TokenType.BRACED) {
                 indices.push(2);
             }
             break;
 
         case 'while':
-            // while cond body → args[1] 是 body
+            // while cond body → args[1] is the body
             if (args.length >= 2 && args[1].type === TokenType.BRACED) {
                 indices.push(1);
             }
@@ -229,26 +231,26 @@ function getControlFlowBodyIndices(cmdName: string, args: CommandNode['args']): 
 
         case 'for':
             // for init cond incr body
-            // args[0]=init（可含 set）, args[2]=incr（可含 set）, args[3]=body
+            // args[0]=init (may contain set), args[2]=incr (may contain set), args[3]=body
             if (args.length >= 1 && args[0].type === TokenType.BRACED) {
-                indices.push(0);  // init 块
+                indices.push(0);  // init block
             }
             if (args.length >= 3 && args[2].type === TokenType.BRACED) {
-                indices.push(2);  // incr 块
+                indices.push(2);  // incr block
             }
             if (args.length >= 4 && args[3].type === TokenType.BRACED) {
-                indices.push(3);  // body 块
+                indices.push(3);  // body block
             }
             break;
 
         case 'if':
-            // if cond body → args[1] 是 body
+            // if cond body → args[1] is the body
             if (args.length >= 2 && args[1].type === TokenType.BRACED) {
                 indices.push(1);
             }
-            // if cond body else {elseBody} → args[3] 是 else body
+            // if cond body else {elseBody} → args[3] is the else body
             // if cond body elseif {cond2} {body2} → args[3], args[4] ...
-            // 扫描后续的 BRACED args（跳过中间的 WORD 如 "else"/"elseif"）
+            // Scan the following BRACED args (skipping WORDs such as "else"/"elseif")
             for (let i = 2; i < args.length; i++) {
                 if (args[i].type === TokenType.BRACED) {
                     indices.push(i);
@@ -257,22 +259,22 @@ function getControlFlowBodyIndices(cmdName: string, args: CommandNode['args']): 
             break;
 
         case 'elseif':
-            // elseif cond body → args[1] 是 body
+            // elseif cond body → args[1] is the body
             if (args.length >= 2 && args[1].type === TokenType.BRACED) {
                 indices.push(1);
             }
             break;
 
         case 'else':
-            // else body → args[0] 是 body（else 可能被解析为命令名，body 是 args[0]）
+            // else body → args[0] is the body (else may be parsed as the command name)
             if (args.length >= 1 && args[0].type === TokenType.BRACED) {
                 indices.push(0);
             }
             break;
 
         case 'switch':
-            // switch ?opts? val body1 body2 ... → 所有 trailing BRACED args
-            // 跳过前 1-2 个非 BRACED args（opts 和 val）
+            // switch ?opts? val body1 body2 ... → every trailing BRACED arg
+            // Skip the leading 1-2 non-BRACED args (opts and val)
             for (let i = 0; i < args.length; i++) {
                 if (args[i].type === TokenType.BRACED) {
                     indices.push(i);
@@ -282,7 +284,7 @@ function getControlFlowBodyIndices(cmdName: string, args: CommandNode['args']): 
 
         case 'try':
             // try body ?on? ?trap? ?finally?
-            // 所有 BRACED args 都是代码块
+            // Every BRACED arg is a code block
             for (let i = 0; i < args.length; i++) {
                 if (args[i].type === TokenType.BRACED) {
                     indices.push(i);
@@ -295,13 +297,14 @@ function getControlFlowBodyIndices(cmdName: string, args: CommandNode['args']): 
 }
 
 /**
- * 递归从解析结果中提取所有变量定义（包括嵌套的控制流体）。
+ * Recursively extract every variable definition from a parse result
+ * (including the nested control-flow bodies).
  *
- * @param parseResult  - 解析结果
- * @param unit         - 编译单元
- * @param lineOffset   - 行号偏移（parse 内行号 + offset = 文件实际行号）
- * @param variables    - 符号表（原地修改）
- * @param depth        - 当前递归深度（限制最大 4 层）
+ * @param parseResult  - the parse result
+ * @param unit         - the compilation unit
+ * @param lineOffset   - the line offset (line within the parse + offset = real file line)
+ * @param variables    - the symbol table (modified in place)
+ * @param depth        - the current recursion depth (capped at 4 levels)
  */
 function extractVarsDeep(
     parseResult: ParseResult,
@@ -310,9 +313,9 @@ function extractVarsDeep(
     variables: Map<string, VariableInfo[]>,
     depth: number = 0
 ): void {
-    if (depth > 4) { return; } // 防止无限递归
+    if (depth > 4) { return; } // Guard against infinite recursion
 
-    // 1. 提取 set 定义
+    // 1. Extract the set definitions
     for (const setNode of parseResult.sets) {
         const info: VariableInfo = {
             name: setNode.varName,
@@ -334,19 +337,19 @@ function extractVarsDeep(
         }
     }
 
-    // 2. 提取命令隐式定义的变量（foreach, lassign, gets, catch, scan）
+    // 2. Extract the implicitly defined variables (foreach, lassign, gets, catch, scan)
     for (const cmd of parseResult.commands) {
         addCmdDefinedVars(cmd, unit, cmd.line + lineOffset, cmd.column, variables);
 
-        // 3. 递归解析控制流体的 body 花括号
+        // 3. Recursively parse the braced bodies of control-flow commands
         const bodyIndices = getControlFlowBodyIndices(cmd.commandName, cmd.args);
         for (const bi of bodyIndices) {
             const bodyToken = cmd.args[bi];
-            // bodyToken.value 是花括号内的文本（不含外层 {}）
+            // bodyToken.value is the text inside the braces (without the outer {})
             const bodyText = bodyToken.value;
             if (!bodyText || bodyText.trim().length === 0) { continue; }
             const bodyParseResult = parse(unit.filePath, bodyText);
-            // bodyToken.line 是 { 所在行，body 内的代码从下一行开始
+            // bodyToken.line is the line of the {; the body code starts on the next line
             const bodyLineOffset = bodyToken.line - 1;
             extractVarsDeep(bodyParseResult, unit, bodyLineOffset, variables, depth + 1);
         }
@@ -354,22 +357,22 @@ function extractVarsDeep(
 }
 
 // ════════════════════════════════════════════════════════════
-//  编译引擎
+//  Compilation engine
 // ════════════════════════════════════════════════════════════
 
 export class TclCompiler {
     private workspaceRoot: string = '';
     private fFilePath: string = '';
     private cache: Map<string, ParseResult> = new Map();
-    private compileOrder: string[] = []; // 绝对路径列表
-    private processedSourceFiles: Set<string> = new Set(); // 防止循环 source
+    private compileOrder: string[] = []; // list of absolute paths
+    private processedSourceFiles: Set<string> = new Set(); // guards against source cycles
 
     constructor() { }
 
     /**
-     * 编译整个项目。
-     * @param workspaceRoot - VS Code 工作区根目录
-     * @param fFileRelPath - .f 文件相对路径（默认 "tcl.f"）
+     * Compile the whole project.
+     * @param workspaceRoot - the VS Code workspace root
+     * @param fFileRelPath - the relative path of the .f file (defaults to "tcl.f")
      */
     compile(workspaceRoot: string, fFileRelPath: string = 'tcl.f'): CompileResult {
         this.workspaceRoot = workspaceRoot;
@@ -381,18 +384,18 @@ export class TclCompiler {
         const errors: CompileError[] = [];
         const warnings: CompileWarning[] = [];
 
-        // 1. 解析 .f 文件
+        // 1. Parse the .f file
         const fileList = this.parseFFile(this.fFilePath, workspaceRoot, errors);
         if (fileList.length === 0 && errors.length === 0) {
             errors.push({
-                message: `.f 文件为空或不存在: ${fFileRelPath}`,
+                message: t('compile.fFileEmpty', fFileRelPath),
                 filePath: this.fFilePath,
                 line: 1,
                 column: 1
             });
         }
 
-        // 2. 按顺序编译每个 TCL 文件
+        // 2. Compile every TCL file in order
         const units: CompilationUnit[] = [];
         for (let i = 0; i < fileList.length; i++) {
             const absPath = fileList[i];
@@ -400,7 +403,7 @@ export class TclCompiler {
 
             if (!fs.existsSync(absPath)) {
                 errors.push({
-                    message: `文件不存在: ${relPath}`,
+                    message: t('compile.fileNotFound', relPath),
                     filePath: absPath,
                     line: 1,
                     column: 1
@@ -424,12 +427,12 @@ export class TclCompiler {
                 };
                 units.push(unit);
 
-                // 处理 source 命令（嵌套文件包含）
+                // Handle the source command (nested file inclusion)
                 this.processSourceCommands(parseResult, absPath, i + 1, fileList, errors);
 
             } catch (e: any) {
                 errors.push({
-                    message: `读取文件失败: ${e.message}`,
+                    message: t('compile.readFailed', e.message),
                     filePath: absPath,
                     line: 1,
                     column: 1
@@ -437,7 +440,7 @@ export class TclCompiler {
             }
         }
 
-        // 3. 构建全局符号表
+        // 3. Build the global symbol table
         const { variables, varRefs, varErrors, varWarnings } = this.buildSymbolTable(units);
 
         errors.push(...varErrors);
@@ -455,11 +458,14 @@ export class TclCompiler {
     }
 
     /**
-     * 解析 .f 文件获取文件列表（按行顺序）。
-     * 支持递归 -F / -f 指令：
-     *   -F xxx.f：从当前 .f 所在目录找到 xxx.f，切换到 xxx.f 所在目录继续解析
-     *   -f xxx.f：从当前 .f 所在目录找到 xxx.f，但其内部相对路径仍相对于调用者 .f 目录
-     * 每行一个文件路径（相对于 .f 文件所在目录），忽略 # 注释行和空行。
+     * Parse the .f file into a file list (in line order).
+     * The recursive -F / -f directives are supported:
+     *   -F xxx.f: resolve xxx.f against the current .f directory and continue parsing
+     *             with xxx.f's own directory as the new base
+     *   -f xxx.f: resolve xxx.f against the current .f directory, but keep resolving
+     *             its inner relative paths against the calling .f directory
+     * One file path per line (relative to the directory of the .f file);
+     * blank lines and # comment lines are ignored.
      */
     private parseFFile(
         fFilePath: string,
@@ -475,13 +481,14 @@ export class TclCompiler {
     }
 
     /**
-     * 递归解析 .f 文件。
-     * @param fFilePath - 当前 .f 文件的绝对路径
-     * @param baseDir - 当前行路径解析的基准目录（-f 模式下为调用者目录，-F 模式下为当前 .f 目录）
-     * @param workspaceRoot - 工作区根目录
-     * @param errors - 错误收集
-     * @param result - 结果收集（追加）
-     * @param visited - 已访问的 .f 文件集合（防循环）
+     * Recursively parse a .f file.
+     * @param fFilePath - the absolute path of the current .f file
+     * @param baseDir - the base directory used to resolve the paths on each line
+     *                  (the caller's directory in -f mode, the current .f directory in -F mode)
+     * @param workspaceRoot - the workspace root
+     * @param errors - the error collection
+     * @param result - the result collection (appended to)
+     * @param visited - the set of already visited .f files (cycle guard)
      */
     private parseFFileRecursive(
         fFilePath: string,
@@ -491,10 +498,10 @@ export class TclCompiler {
         result: string[],
         visited: Set<string>
     ): void {
-        // 规范化路径防重复
+        // Normalize the path to avoid duplicates
         const normalized = path.resolve(fFilePath);
 
-        // 防循环：已访问过的 .f 文件不再处理
+        // Cycle guard: never process an already visited .f file again
         if (visited.has(normalized)) {
             return;
         }
@@ -502,7 +509,7 @@ export class TclCompiler {
 
         if (!fs.existsSync(fFilePath)) {
             errors.push({
-                message: `.f 文件不存在: ${path.relative(workspaceRoot, fFilePath)}`,
+                message: t('compile.fFileNotFound', path.relative(workspaceRoot, fFilePath)),
                 filePath: fFilePath,
                 line: 1,
                 column: 1
@@ -517,12 +524,12 @@ export class TclCompiler {
 
             for (let i = 0; i < lines.length; i++) {
                 const trimmed = lines[i].trim();
-                // 跳过空行和注释
+                // Skip blank lines and comments
                 if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('//')) {
                     continue;
                 }
 
-                // 移除行内注释（# 后面部分）
+                // Strip the trailing comment (everything after the #)
                 const commentIdx = trimmed.indexOf('#');
                 const cleanLine = commentIdx >= 0
                     ? trimmed.substring(0, commentIdx).trim()
@@ -530,7 +537,7 @@ export class TclCompiler {
 
                 if (!cleanLine) { continue; }
 
-                // ── 处理 -F 指令：切换目录的递归 ──
+                // ── Handle the -F directive: recurse and switch the base directory ──
                 if (cleanLine.startsWith('-F') && (cleanLine.length === 2 || cleanLine[2] === ' ' || cleanLine[2] === '\t')) {
                     const subFPath = cleanLine.substring(2).trim();
                     if (!subFPath) {
@@ -542,17 +549,17 @@ export class TclCompiler {
                         });
                         continue;
                     }
-                    // 解析 sub .f 路径（相对于当前 .f 所在目录）
+                    // Resolve the sub .f path (relative to the current .f directory)
                     const subFAbs = path.isAbsolute(subFPath)
                         ? subFPath
                         : path.resolve(fDir, subFPath);
-                    // -F: 切换到 sub .f 所在目录作为新 baseDir
+                    // -F: use the sub .f directory as the new baseDir
                     const subFDir = path.dirname(subFAbs);
                     this.parseFFileRecursive(subFAbs, subFDir, workspaceRoot, errors, result, visited);
                     continue;
                 }
 
-                // ── 处理 -f 指令：不切换目录的递归 ──
+                // ── Handle the -f directive: recurse without switching the directory ──
                 if (cleanLine.startsWith('-f') && (cleanLine.length === 2 || cleanLine[2] === ' ' || cleanLine[2] === '\t')) {
                     const subFPath = cleanLine.substring(2).trim();
                     if (!subFPath) {
@@ -564,16 +571,16 @@ export class TclCompiler {
                         });
                         continue;
                     }
-                    // 解析 sub .f 路径（相对于当前 .f 所在目录）
+                    // Resolve the sub .f path (relative to the current .f directory)
                     const subFAbs = path.isAbsolute(subFPath)
                         ? subFPath
                         : path.resolve(fDir, subFPath);
-                    // -f: 保持当前 baseDir 不变（不切换到 sub .f 所在目录）
+                    // -f: keep the current baseDir (do not switch to the sub .f directory)
                     this.parseFFileRecursive(subFAbs, baseDir, workspaceRoot, errors, result, visited);
                     continue;
                 }
 
-                // ── 普通行：TCL 文件路径（相对于 baseDir 或绝对路径） ──
+                // ── Ordinary line: a TCL file path (relative to baseDir, or absolute) ──
                 let absPath: string;
                 if (path.isAbsolute(cleanLine)) {
                     absPath = cleanLine;
@@ -594,7 +601,7 @@ export class TclCompiler {
     }
 
     /**
-     * 处理 source 命令，将引用的文件插入编译顺序。
+     * Handle the source command by inserting the referenced file into the compilation order.
      */
     private processSourceCommands(
         parseResult: ParseResult,
@@ -608,11 +615,11 @@ export class TclCompiler {
         for (const srcNode of parseResult.sources) {
             let rawPath = srcNode.filePath;
 
-            // 如果路径包含变量引用，尝试从符号表解析
+            // When the path contains a variable reference, try to resolve it from the symbol table
             if (rawPath.includes('$')) {
                 const resolved = this.resolveVarPath(rawPath, variables);
                 if (!resolved) {
-                    // 变量未定义，无法静态确定路径 — 跳过检查
+                    // The variable is undefined, the path cannot be resolved statically — skip the check
                     continue;
                 }
                 rawPath = resolved;
@@ -625,14 +632,14 @@ export class TclCompiler {
                 absPath = path.resolve(currentDir, rawPath);
             }
 
-            // 防止循环引用
+            // Guard against circular references
             if (this.processedSourceFiles.has(absPath)) {
                 continue;
             }
 
             if (!fs.existsSync(absPath)) {
                 errors.push({
-                    message: `source 引用的文件不存在: ${srcNode.filePath}`,
+                    message: t('compile.sourceNotFound', srcNode.filePath),
                     filePath: currentFilePath,
                     line: srcNode.line,
                     column: srcNode.column
@@ -640,7 +647,7 @@ export class TclCompiler {
                 continue;
             }
 
-            // 如果不在 fileList 中，追加到末尾
+            // Append it to the end when it is not already in fileList
             if (!fileList.includes(absPath)) {
                 fileList.push(absPath);
                 this.compileOrder.push(absPath);
@@ -650,8 +657,8 @@ export class TclCompiler {
     }
 
     /**
-     * 解析路径中的 $varName 变量引用。
-     * @returns 解析后的路径，若变量未定义则返回 null
+     * Resolve the $varName references inside a path.
+     * @returns the resolved path, or null when a variable is undefined
      */
     private resolveVarPath(rawPath: string, variables?: Map<string, VariableInfo[]>): string | null {
         if (!variables) { return null; }
@@ -664,7 +671,7 @@ export class TclCompiler {
             const varName = match[2];
             const defs = variables.get(varName);
             if (!defs || defs.length === 0) { return null; }
-            // 使用最近的定义值
+            // Use the most recent definition
             const lastDef = defs[defs.length - 1];
             if (!lastDef.isResolved) { return null; }
             resolved = resolved.replace(match[0], lastDef.value);
@@ -674,7 +681,7 @@ export class TclCompiler {
     }
 
     /**
-     * 获取或解析文件（使用缓存）。
+     * Get or parse a file (using the cache).
      */
     private getOrParse(filePath: string, content: string): ParseResult {
         const cached = this.cache.get(filePath);
@@ -685,8 +692,8 @@ export class TclCompiler {
     }
 
     /**
-     * 构建全局符号表。
-     * 按编译顺序处理每个文件的 set 和 varRef。
+     * Build the global symbol table.
+     * Processes the set and varRef nodes of every file in compilation order.
      */
     private buildSymbolTable(units: CompilationUnit[]): {
         variables: Map<string, VariableInfo[]>;
@@ -694,13 +701,13 @@ export class TclCompiler {
         varErrors: CompileError[];
         varWarnings: CompileWarning[];
     } {
-        // 变量: Map<varName, 定义信息列表(按编译顺序)>
+        // Variables: Map<varName, list of definitions (in compilation order)>
         const variables = new Map<string, VariableInfo[]>();
         const varRefs: VariableRefInfo[] = [];
         const varErrors: CompileError[] = [];
         const varWarnings: CompileWarning[] = [];
 
-        // 按编译顺序处理所有 set
+        // Process every set in compilation order
         for (const unit of units) {
             for (const setNode of unit.sets) {
                 const simpleValue = resolveSimpleValue(setNode.valueText);
@@ -728,12 +735,13 @@ export class TclCompiler {
             }
         }
 
-        // 处理 foreach / lassign / gets / catch / scan 等隐式变量定义
+        // Handle the implicit variable definitions of foreach / lassign / gets / catch / scan
         for (const unit of units) {
             for (const cmd of unit.parseResult.commands) {
                 addCmdDefinedVars(cmd, unit, cmd.line, cmd.column, variables);
 
-                // 递归解析顶层控制流命令的代码块（for init/incr/body, if body 等）
+                // Recursively parse the code blocks of top-level control-flow commands
+                // (for init/incr/body, if body, ...)
                 const bodyIndices = getControlFlowBodyIndices(cmd.commandName, cmd.args);
                 for (const bi of bodyIndices) {
                     const bodyToken = cmd.args[bi];
@@ -745,27 +753,28 @@ export class TclCompiler {
                 }
             }
 
-            // 处理 proc 体内的所有变量定义（递归解析嵌套控制流体）
+            // Handle every variable definition inside a proc body (recursing into nested bodies)
             for (const proc of unit.procs) {
                 if (!proc.bodyText) { continue; }
                 const bodyResult = parse(unit.filePath, proc.bodyText);
                 const lineOffset = proc.bodyStartLine - 1;
 
-                // 递归提取 proc 体内所有变量（包括 if/while/for/foreach/switch 嵌套体）
+                // Recursively extract every variable in the proc body
+                // (including nested if/while/for/foreach/switch bodies)
                 extractVarsDeep(bodyResult, unit, lineOffset, variables);
             }
         }
 
-        // 解析变量之间的引用关系
+        // Resolve the references between variables
         for (const unit of units) {
             for (const refNode of unit.varRefs) {
                 const varName = refNode.varName;
                 const definitions = variables.get(varName);
 
-                // 找到在此引用之前（按编译顺序）的最近定义
+                // Find the most recent definition before this reference (in compilation order)
                 let definition: VariableInfo | null = null;
                 if (definitions && definitions.length > 0) {
-                    // 找最接近的定义（同文件中此引用之前，或之前文件中的定义）
+                    // Find the closest definition (earlier in the same file, or in an earlier file)
                     for (let di = definitions.length - 1; di >= 0; di--) {
                         const def = definitions[di];
                         if (def.order < unit.order ||
@@ -774,19 +783,20 @@ export class TclCompiler {
                             break;
                         }
                     }
-                    // 如果所有定义都在引用之后，取第一个（可能是前置声明）
+                    // When every definition comes after the reference, take the first one
+                    // (it may be a forward declaration)
                     if (!definition) {
                         definition = definitions[0];
                         varWarnings.push({
-                            message: `变量 "${varName}" 在使用之后定义（文件 ${unit.relativePath}:${refNode.line}，定义在 ${definition.relativePath}:${definition.line}）`,
+                            message: t('compile.usedBeforeDefined', varName, unit.relativePath, refNode.line, definition.relativePath, definition.line),
                             filePath: unit.filePath,
                             line: refNode.line,
                             column: refNode.column
                         });
                     }
                 } else {
-                    // 未定义的变量
-                    // 检查是否为 proc 参数
+                    // Undefined variable
+                    // Check whether it is a proc argument
                     let isProcArg = false;
                     for (const pu of units) {
                         for (const proc of pu.procs) {
@@ -800,7 +810,7 @@ export class TclCompiler {
 
                     if (!isProcArg) {
                         varErrors.push({
-                            message: `未定义的变量 "${varName}"`,
+                            message: t('compile.undefinedVariable', varName),
                             filePath: unit.filePath,
                             line: refNode.line,
                             column: refNode.column
@@ -825,19 +835,19 @@ export class TclCompiler {
     }
 
     /**
-     * 增量编译：当单个文件变化时更新符号表。
-     * @param changedFilePath - 变化的文件绝对路径
-     * @param content - 新的文件内容
+     * Incremental compilation: update the symbol table when a single file changes.
+     * @param changedFilePath - the absolute path of the changed file
+     * @param content - the new file content
      */
     incrementalUpdate(changedFilePath: string, content: string, lastResult: CompileResult): CompileResult {
-        // 清除此文件的缓存
+        // Drop the cache entry for this file
         this.cache.delete(changedFilePath);
 
-        // 重新解析文件
+        // Re-parse the file
         const parseResult = parse(changedFilePath, content);
         this.cache.set(changedFilePath, parseResult);
 
-        // 查找或创建对应的 CompilationUnit
+        // Find or create the matching CompilationUnit
         const relPath = path.relative(lastResult.workspaceRoot, changedFilePath);
         let unit = lastResult.units.find(u => u.filePath === changedFilePath);
         const order = unit ? unit.order : lastResult.units.length;
@@ -854,14 +864,14 @@ export class TclCompiler {
         };
 
         if (unit) {
-            // 替换旧单元
+            // Replace the old unit
             const idx = lastResult.units.indexOf(unit);
             lastResult.units[idx] = newUnit;
         } else {
             lastResult.units.push(newUnit);
         }
 
-        // 重建符号表
+        // Rebuild the symbol table
         const { variables, varRefs, varErrors, varWarnings } =
             this.buildSymbolTable(lastResult.units);
 
@@ -874,11 +884,11 @@ export class TclCompiler {
     }
 
     /**
-     * 查询变量定义信息。
-     * @param varName 变量名
-     * @param result 编译结果
-     * @param refFile 引用所在文件
-     * @param refLine 引用所在行
+     * Look up the definition information of a variable.
+     * @param varName the variable name
+     * @param result the compilation result
+     * @param refFile the file holding the reference
+     * @param refLine the line holding the reference
      */
     queryVariable(
         varName: string,
@@ -892,7 +902,7 @@ export class TclCompiler {
         let definition: VariableInfo | null = null;
         if (allDefs.length > 0) {
             if (refFile && refLine) {
-                // 查找在此引用之前的最近定义
+                // Find the most recent definition before this reference
                 const unit = result.units.find(u => u.filePath === refFile);
                 const refOrder = unit ? unit.order : 99999;
                 for (let di = allDefs.length - 1; di >= 0; di--) {
@@ -907,7 +917,7 @@ export class TclCompiler {
                     definition = allDefs[allDefs.length - 1];
                 }
             } else {
-                // 取最后定义的值
+                // Take the value of the last definition
                 definition = allDefs[allDefs.length - 1];
             }
         }
@@ -916,7 +926,7 @@ export class TclCompiler {
     }
 
     /**
-     * 获取编译顺序中的所有文件路径。
+     * Get every file path in the compilation order.
      */
     getCompileOrder(): string[] {
         return [...this.compileOrder];

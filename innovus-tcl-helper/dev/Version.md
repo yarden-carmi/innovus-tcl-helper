@@ -1,23 +1,25 @@
-0.2 ✅ 增强自动补全（参数类型提示 + 占位符 + 枚举选项），增加自定义跳转（F12/Ctrl+Click → 虚拟帮助文档），必选参数缺失诊断（精确解析参数行）
+0.2 ✅ Better auto-completion (option type hints + placeholders + enum choices), custom navigation (F12/Ctrl+Click → virtual help document), missing required-argument diagnostics (by parsing the argument line precisely)
 
-0.3 ✅ 支持切换 Innovus 版本（多版本数据目录扫描 + 快速切换）。TCL 代码静态检查增强（三级检查：basic/standard/strict，含相似命令建议、重复参数检测、参数类型验证）。Copilot AI 集成（3 个 LM Tools：innovus_list_commands / innovus_get_command_help / innovus_parse_tcl_script）。TCL 脚本 AI 分析命令（Ctrl+Shift+P → "AI 分析当前 TCL 脚本"，生成 Markdown 报告）。
+0.3 ✅ Innovus version switching (multi-version data directory scanning + quick switch). Stronger TCL static checking (three levels: basic/standard/strict, with similar command suggestions, duplicate option detection and argument type validation). Copilot AI integration (3 LM tools: innovus_list_commands / innovus_get_command_help / innovus_parse_tcl_script). AI script analysis command (Ctrl+Shift+P → "AI Analyze Current TCL Script", producing a Markdown report).
 
-0.4 ✅ 跨文件 TCL 编译分析：.f 文件驱动的编译引擎（默认 tcl.f，可配置），按顺序编译所有 TCL 脚本；跨文件变量追踪（构建全局符号表）；悬浮 $varName/变量名显示值和定义位置；未定义变量/未使用变量诊断；文件保存时增量编译；.f 文件变化自动重编译；Lint 报告导出（Markdown/JSON）；MCP Server 暴露 lint 接口（innovus_lint_tcl_script 工具，支持跨文件变量追踪和错误检测）；新增 3 个 VS Code 命令（运行 Lint / 显示报告 / 打开 .f 文件）；新增 2 个配置项（enableCompilation / fFile）
+0.4 ✅ Cross-file TCL compilation analysis: a `.f`-driven compilation engine (defaults to tcl.f, configurable) compiling every TCL script in order; cross-file variable tracking (a global symbol table); hovering `$varName`/a variable name shows its value and definition site; undefined/unused variable diagnostics; incremental compilation on save; automatic recompile when the `.f` file changes; lint report export (Markdown/JSON); the MCP server exposes a lint interface (the innovus_lint_tcl_script tool, with cross-file variable tracking and error detection); 3 new VS Code commands (run lint / show report / open the .f file); 2 new settings (enableCompilation / fFile)
 
-0.4.2 ✅ Agent Skills 系统（5 个 Skill 文件自动同步工作区、installSkills 命令）。MCP 防幻觉强化（强制 MCP 查询工作流、Lint-before-deliver）。Log 输出规范（文件输出优先、目录结构约定）。Proc 跨文件 F12 定义跳转（跨任意编译单元）。MCP Server Lint 工具拆分（`lint_tcl` 快速摘要 + `lint_tcl_detailed` 详细报告），传文件路径省 token。LM Tools 重构（`compileFromPaths()` 通用方法）。新增 4 个 AI 提示词文件（中英文）。
+0.4.2 ✅ Agent skills (5 skill files synced into the workspace automatically, the installSkills command). Stronger MCP anti-hallucination rules (a mandatory MCP lookup workflow, lint-before-deliver). Log output conventions (files first, a fixed directory layout). Cross-file F12 navigation to proc definitions (across any compilation unit). The MCP server lint tool split into `lint_tcl` (quick summary) + `lint_tcl_detailed` (full report), passing file paths to save tokens. LM tools reworked around the shared `compileFromPaths()` helper. 4 new AI prompt files (Chinese and English).
 
-0.4.3 ✅ 递归 .f 文件解析（-F / -f 指令，支持切换/保持目录、任意层级递归、循环引用检测）。动态设置 .f 文件路径命令（交互输入、路径校验、自动重编译、工作区级别持久化、支持子目录路径 temp/a.f）。
+0.4.3 ✅ Recursive .f file parsing (the -F / -f directives, switching or keeping the base directory, nesting to any depth, cycle detection). A command to set the .f file path dynamically (interactive input, path validation, automatic recompile, workspace-level persistence, subdirectory paths such as temp/a.f).
 
-0.5 ✅ TCL 脚本运行引擎（基于 tclsh9.0，child_process 执行）。Innovus 命令智能拦截（自动检测 + 注入 proc 文档包装器，输出语法/参数说明而不报错）。标准 TCL 正常执行（set/puts/proc/expr 等）。专门输出通道 `Innovus TCL: Run`。自动查找 tclsh（Homebrew → 系统）。TCL 运行时错误捕获显示。新增 VS Code 命令 `innovus-tcl.runScript`。
+0.5 ✅ TCL script execution engine (tclsh9.0 through child_process). Innovus command interception (auto-detection + injected proc documentation wrappers, printing the syntax/options instead of failing). Standard TCL runs normally (set/puts/proc/expr, ...). A dedicated `Innovus TCL: Run` output channel. Automatic tclsh discovery (Homebrew → system). TCL runtime errors captured and displayed. New VS Code command `innovus-tcl.runScript`.
 
-0.5.1 ✅ 跨平台 tclsh 支持（bin/<platform></platform>/tclsh9.0 目录结构，运行时自动检测 os.platform()+os.arch()，darwin-arm64 已编译）。运行输出文件保存（runSaveOutput + runOutputDir 配置，时间戳 .log 文件含 stdout/stderr/Innovus 命令列表，自动创建输出目录）。.f 项目运行命令（runProject，预扫描统一包装器，逐文件编译顺序执行）。编辑器右上角运行按钮（▶️ 当前文件 + 📦 .f 项目）。
+0.5.1 ✅ Cross-platform tclsh support (the bin/<platform>/tclsh9.0 layout, detected at runtime from os.platform()+os.arch(), darwin-arm64 compiled). Run output saved to a file (the runSaveOutput + runOutputDir settings, a timestamped .log holding stdout/stderr/the Innovus command list, output directory created automatically). The .f project run command (runProject, pre-scanned shared wrappers, executed file by file in compilation order). Run buttons in the editor title bar (▶️ current file + 📦 .f project).
 
-0.5.2 ✅ 编辑器按钮纯图标化（editor/title + navigation，$(play)/$(run-all) 区分图标 + 悬停 tooltip）。tsconfig 修复（types: [node]）。
+0.5.2 ✅ Icon-only editor buttons (editor/title + navigation, $(play)/$(run-all) as distinct icons + hover tooltip). tsconfig fix (types: [node]).
 
 0.6
 
-TCL运行仿真器，可以运行tcl命令，将innovus的命令包装为输出文本。根据数据库simulation的配置，将根据参数输出相关的文本结果
+TCL run simulator: runs TCL commands and wraps the Innovus commands so they print text. Driven by the simulation database configuration, it prints the text result matching the arguments.
 
-0.6.4 ✅ 跨平台 tclsh 体验优化：平台感知安装指引（macOS brew / Linux apt/dnf / Windows ActiveTcl）、激活时一次性弹窗提示、运行命令错误增强。不再捆绑全平台 tclsh 二进制，仅内置 macOS arm64。
+0.6.4 ✅ Better cross-platform tclsh experience: platform-aware installation guidance (macOS brew / Linux apt/dnf / Windows ActiveTcl), a one-time prompt on activation, richer run-command errors. The all-platform tclsh binaries are no longer bundled — only macOS arm64 ships with the extension.
 
-TCL 脚本拼接后 AI 解析，生成上下文更加相关的 TCL 脚本描述。
+0.6.5 ✅ The extension interface, source comments and developer documentation translated to English. `innovus-tcl.language` now only selects the documentation database (cn/en); the UI is always English.
+
+TCL scripts are concatenated and analyzed by the AI to produce a more context-aware description of the script.

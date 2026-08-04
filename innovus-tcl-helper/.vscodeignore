@@ -16,16 +16,16 @@ scripts/**
 *.vsix
 **/.DS_Store
 
-# === data/ 激进精简：排除全部，只加回必要的 ===
+# === data/ aggressive trim: exclude everything, then add back only what is needed ===
 data/**
-# 仿真 DB（单文件）
+# Simulation DB (single file)
 !data/simulations/cn.db.tcl
 !data/simulations/en.db.tcl
-# help DB（单文件）
+# Help DB (single file)
 !data/cmds/innovus/25.1/cn/help.db.json
 !data/cmds/innovus/25.1/en/help.db.json
 !data/cmds/innovus/test/
-# 必要目录
+# Required directories
 !data/tcl-builtins/
 !data/example/
 !data/cache/

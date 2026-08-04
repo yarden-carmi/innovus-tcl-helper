@@ -1,16 +1,16 @@
 /**
- * Innovus TCL Helper - VS Code 插件入口
+ * Innovus TCL Helper - VS Code extension entry point
  *
- * 功能:
- * 1. Hover 悬停显示 Innovus 命令文档（中/英文可切换）
- * 2. 命令名和参数自动补全
- * 3. TCL 基础语法静态检查 + Innovus 命令参数校验（3 级别）
- * 4. 跨文件 TCL 脚本编译分析 + 变量追踪（.f 文件驱动）
- * 5. 多版本 Innovus 数据支持
- * 6. Copilot AI 工具集成（LM Tools）
- * 7. F12/Ctrl+Click 帮助文档跳转
- * 8. Semantic Tokens 语法高亮
- * 9. MCP Lint 接口暴露
+ * Features:
+ * 1. Hover tooltips with Innovus command documentation (Chinese/English database)
+ * 2. Command name and option auto-completion
+ * 3. TCL static checking + Innovus command argument validation (3 levels)
+ * 4. Cross-file TCL compilation analysis + variable tracking (driven by the .f file)
+ * 5. Support for multiple Innovus data versions
+ * 6. Copilot AI tool integration (LM Tools)
+ * 7. F12/Ctrl+Click navigation to the help documentation
+ * 8. Semantic token syntax highlighting
+ * 9. MCP lint interface
  */
 
 import * as vscode from 'vscode';
@@ -24,16 +24,18 @@ import { TclLintProvider } from './lint';
 import { InnovusDefinitionProvider, InnovusPlainHelpProvider, InnovusDocumentLinkProvider, TclVariableDefinitionProvider, showHelp } from './definition';
 import { InnovusSemanticTokensProvider } from './semantic';
 import { registerAllTools, buildScriptContextForCommand } from './tools';
-import { getRunner, TclRunner, getTclshInstallGuide } from './runner';
+import { getRunner, TclRunner, getTclshInstallGuide, skippedMessage } from './runner';
+import { t, setUiLanguage } from './i18n';
 
 let diagnosticsProvider: TclDiagnosticsProvider | undefined;
 let lintProvider: TclLintProvider | undefined;
 let variableDefProvider: TclVariableDefinitionProvider | undefined;
 
 /**
- * 自动安装 Agent Skills 到工作区 .agents/skills/&lt;name&gt;/SKILL.md。
- * VS Code Copilot 自动发现 .agents/skills 下的 SKILL.md 文件。
- * 扩展激活时调用，每个 skill 独立子目录，名称为小写连字符格式。
+ * Install the agent skills into the workspace at .agents/skills/&lt;name&gt;/SKILL.md.
+ * VS Code Copilot discovers the SKILL.md files under .agents/skills automatically.
+ * Called on extension activation; every skill gets its own subdirectory named in
+ * lowercase-hyphen form.
  */
 function installAgentSkills(extensionPath: string): void {
     const skillName = 'innovus-tcl-helper';
@@ -48,7 +50,7 @@ function installAgentSkills(extensionPath: string): void {
             const targetDir = path.join(ws.uri.fsPath, '.agents', 'skills', skillName);
             if (!fs.existsSync(targetDir)) { fs.mkdirSync(targetDir, { recursive: true }); }
 
-            // 递归复制源目录下所有文件
+            // Recursively copy every file under the source directory
             const copyDir = (src: string, dest: string) => {
                 for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
                     const s = path.join(src, entry.name);
@@ -76,67 +78,80 @@ function installAgentSkills(extensionPath: string): void {
 }
 
 /**
- * 根据配置值解析实际语言。
- * "auto" → 跟随 VS Code 界面语言（中文 → zh，其他 → en）
+ * Resolve `innovus-tcl.language` into a concrete language.
+ * "auto" → follow the VS Code display language (Chinese → zh, anything else → en).
+ * Anything unrecognized falls back to English.
  */
 function resolveLanguage(configLang: string): Language {
     if (configLang === 'auto') {
-        // vscode.env.language 示例: "zh-cn", "zh-tw", "en", "ja", ...
+        // vscode.env.language examples: "zh-cn", "zh-tw", "en", "ja", ...
         const vsLang = vscode.env.language.toLowerCase();
         return vsLang.startsWith('zh') ? 'zh' : 'en';
     }
-    return configLang as Language;
+    return configLang === 'zh' ? 'zh' : 'en';
+}
+
+/**
+ * Read `innovus-tcl.language` and apply it to both the interface and the command
+ * documentation database — one setting drives both. English is the default.
+ */
+function applyLanguage(db?: ReturnType<typeof getDB>): Language {
+    const raw = vscode.workspace.getConfiguration('innovus-tcl')
+        .get<string>('language', 'en');
+    const lang = resolveLanguage(raw);
+    setUiLanguage(lang);
+    db?.setLanguage(lang);
+    return lang;
 }
 
 export function activate(context: vscode.ExtensionContext) {
-    console.log('[Innovus TCL] 插件已激活');
+    // Resolve the language before anything renders a string
+    applyLanguage();
 
-    // ── TCL 运行输出通道 ──
+    console.log('[Innovus TCL] Extension activated');
+
+    // ── TCL run output channel ──
     const runChannel = vscode.window.createOutputChannel('Innovus TCL: Run', { log: true });
     context.subscriptions.push(runChannel);
 
-    // ── 自动安装 Agent Skills 到工作区 .vscode/skills/ ──
+    // ── Install the agent skills into the workspace ──
     installAgentSkills(context.extensionPath);
 
-    // 初始化 TCL 内建关键字文档路径
+    // Initialize the path to the TCL built-in keyword documentation
     setBuiltinsDataRoot(context.extensionPath);
 
     const config = vscode.workspace.getConfiguration('innovus-tcl');
 
-    // 初始化命令数据库 — 始终使用扩展内置 data/innovus/ 目录
+    // Initialize the command database — always uses the bundled data/innovus/ directory
     const db = getDB(context.extensionPath);
 
-    // 读取语言设置
-    const rawLang = config.get<string>('language', 'auto');
-    const lang = resolveLanguage(rawLang);
-    db.setLanguage(lang);
+    // Apply the language to the database as well (the interface was set above)
+    applyLanguage(db);
 
-    // 读取版本设置（默认 25.1）
+    // Read the version setting (25.1 by default)
     const version = config.get<string>('version', '25.1');
     db.setVersion(version);
 
     db.load();
 
-    // ── 非 macOS 平台：检查 tclsh 是否可用 ──
+    // ── Non-macOS platforms: check whether tclsh is available ──
     const tclshCheckRunner = getRunner();
     const configTclshPath = config.get<string>('tclshPath', '');
     const tclshFound = tclshCheckRunner.findTclsh(context.extensionPath, configTclshPath);
     if (!tclshFound) {
         const isMac = process.platform === 'darwin';
-        const guide = getTclshInstallGuide(lang === 'zh');
+        const guide = getTclshInstallGuide();
         if (isMac) {
-            console.log('[Innovus TCL] ⚠️ tclsh 未找到，请安装 tcl-tk 或设置 innovus-tcl.tclshPath');
+            console.log('[Innovus TCL] ⚠️ tclsh not found, install tcl-tk or set innovus-tcl.tclshPath');
         } else {
-            // Linux / Windows: 主动弹窗提示
+            // Linux / Windows: show a notification
             const onceKey = 'innovus-tcl.tclshWarningShown';
             const hasShown = context.globalState.get<boolean>(onceKey);
             if (!hasShown) {
                 vscode.window.showWarningMessage(
-                    lang === 'zh'
-                        ? `⚠️ 未找到 tclsh 解释器，运行 TCL 脚本功能不可用。\n\n${guide}\n\n配置后可通过 ▶️ 按钮或命令面板运行脚本。`
-                        : `⚠️ tclsh interpreter not found. TCL script execution is unavailable.\n\n${guide}\n\nAfter configuration, use the ▶️ button or command palette to run scripts.`,
+                    t('tclsh.notFoundModal', guide),
                     { modal: true },
-                    lang === 'zh' ? '打开设置' : 'Open Settings'
+                    t('common.openSettings')
                 ).then(choice => {
                     if (choice) {
                         vscode.commands.executeCommand('workbench.action.openSettings', 'innovus-tcl.tclshPath');
@@ -149,7 +164,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     const subs: vscode.Disposable[] = [];
 
-    // 1. Hover Provider - 命令悬停提示 + 跨文件变量值显示
+    // 1. Hover Provider - command tooltips + cross-file variable values
     const hoverProvider = new InnovusHoverProvider();
     if (config.get<boolean>('enableHover', true)) {
         subs.push(vscode.languages.registerHoverProvider(
@@ -158,10 +173,10 @@ export function activate(context: vscode.ExtensionContext) {
         ));
     }
 
-    // 提前创建 Variable Definition Provider（后续 setLintProvider 需要引用）
+    // Create the Variable Definition Provider early (setLintProvider below needs the reference)
     variableDefProvider = new TclVariableDefinitionProvider();
 
-    // 2. Completion Provider - 命令/参数自动补全
+    // 2. Completion Provider - command/option auto-completion
     if (config.get<boolean>('enableCompletion', true)) {
         subs.push(vscode.languages.registerCompletionItemProvider(
             { language: 'tcl' },
@@ -170,7 +185,7 @@ export function activate(context: vscode.ExtensionContext) {
         ));
     }
 
-    // 3a. Diagnostics - 单文件语法与命令检查
+    // 3a. Diagnostics - single-file syntax and command checks
     if (config.get<boolean>('enableDiagnostics', true)) {
         diagnosticsProvider = new TclDiagnosticsProvider();
 
@@ -180,7 +195,7 @@ export function activate(context: vscode.ExtensionContext) {
 
         subs.push(vscode.workspace.onDidSaveTextDocument((doc) => {
             diagnosticsProvider?.updateDiagnostics(doc);
-            // 同时触发增量跨文件 lint
+            // Also trigger the incremental cross-file lint
             if (doc.languageId === 'tcl' && lintProvider) {
                 lintProvider.runIncrementalLint(doc);
             }
@@ -193,25 +208,25 @@ export function activate(context: vscode.ExtensionContext) {
         }));
     }
 
-    // 3b. Cross-file Lint - 跨文件编译分析与变量追踪
+    // 3b. Cross-file Lint - cross-file compilation analysis and variable tracking
     if (config.get<boolean>('enableCompilation', true)) {
         lintProvider = new TclLintProvider();
         hoverProvider.setLintProvider(lintProvider);
         variableDefProvider!.setLintProvider(lintProvider);
 
-        // 初始运行 lint
+        // Initial lint run
         if (vscode.window.activeTextEditor?.document.languageId === 'tcl') {
             lintProvider.runLint(vscode.window.activeTextEditor.document);
         }
 
-        // 文件保存时增量更新
+        // Incremental update when a file is saved
         subs.push(vscode.workspace.onDidSaveTextDocument((doc) => {
             if (doc.languageId === 'tcl' && lintProvider) {
                 lintProvider.runIncrementalLint(doc);
             }
         }));
 
-        // .f 文件变化时重新编译
+        // Recompile when the .f file changes
         subs.push(vscode.workspace.onDidSaveTextDocument((doc) => {
             const fFile = vscode.workspace.getConfiguration('innovus-tcl')
                 .get<string>('fFile', 'tcl.f');
@@ -219,23 +234,23 @@ export function activate(context: vscode.ExtensionContext) {
                 if (lintProvider) {
                     lintProvider.runLint();
                     vscode.window.setStatusBarMessage(
-                        `$(sync) Innovus TCL: 已重新编译 (${lintProvider.getLastResult()?.units.length || 0} 文件)`,
+                        t('status.recompiled', lintProvider.getLastResult()?.units.length || 0),
                         3000
                     );
                 }
             }
         }));
 
-        // 编辑器切换时刷新
+        // Refresh when the editor changes
         subs.push(vscode.window.onDidChangeActiveTextEditor((editor) => {
             if (editor && editor.document.languageId === 'tcl' && lintProvider) {
-                // 不重编译，但确保诊断显示
+                // No recompilation, but make sure the diagnostics are shown
                 lintProvider.runLint();
             }
         }));
     }
 
-    // 4a. Definition Provider — 纯文本模式 (F12 → 虚拟文档)
+    // 4a. Definition Provider — plain text mode (F12 → virtual document)
     const plainHelpProvider = new InnovusPlainHelpProvider();
     subs.push(vscode.workspace.registerTextDocumentContentProvider('innovus-tcl-help', plainHelpProvider));
     subs.push(vscode.languages.registerDefinitionProvider(
@@ -243,24 +258,25 @@ export function activate(context: vscode.ExtensionContext) {
         new InnovusDefinitionProvider()
     ));
 
-    // 4b. Variable Definition Provider — F12/Ctrl+Click 跳转到 $varName 定义位置
+    // 4b. Variable Definition Provider — F12/Ctrl+Click jumps to the $varName definition
     subs.push(vscode.languages.registerDefinitionProvider(
         { language: 'tcl' },
         variableDefProvider
     ));
 
-    // 4c. Document Link Provider — Ctrl+Click 入口（始终生效，模式在回调中判断）
+    // 4c. Document Link Provider — the Ctrl+Click entry point
+    //     (always active, the mode is decided inside the callback)
     subs.push(vscode.languages.registerDocumentLinkProvider(
         { language: 'tcl' },
         new InnovusDocumentLinkProvider()
     ));
 
-    // 4d. Ctrl+Click 回调命令 — 根据当前模式打开 Webview 或虚拟文档
+    // 4d. Ctrl+Click callback command — opens the Webview or the virtual document
     subs.push(vscode.commands.registerCommand('innovus-tcl._showHelp', (cmdName: string) => {
         showHelp(context, cmdName);
     }));
 
-    // 5. Semantic Tokens - Innovus 命令/参数语法高亮
+    // 5. Semantic Tokens - syntax highlighting for Innovus commands/options
     const semanticProvider = new InnovusSemanticTokensProvider();
     subs.push(vscode.languages.registerDocumentSemanticTokensProvider(
         { language: 'tcl' },
@@ -268,36 +284,39 @@ export function activate(context: vscode.ExtensionContext) {
         semanticProvider.getLegend()
     ));
 
-    // 6. Copilot AI 工具集成 — 注册 LM Tools
+    // 6. Copilot AI tool integration — register the LM Tools
     if (config.get<boolean>('enableAITools', true)) {
         registerAllTools(context);
     }
 
-    // 监听配置变更，切换语言/版本/AI工具/编译时自动重载
+    // Watch the configuration and reload automatically when the language,
+    // version, AI tools or compilation settings change
     subs.push(vscode.workspace.onDidChangeConfiguration((e) => {
         const cfg = vscode.workspace.getConfiguration('innovus-tcl');
 
         if (e.affectsConfiguration('innovus-tcl.language')) {
-            const rawLang = cfg.get<string>('language', 'auto');
-            const newLang = resolveLanguage(rawLang);
-            db.setLanguage(newLang);
-            vscode.window.showInformationMessage(
-                `Innovus TCL: 已切换为${newLang === 'zh' ? '中文' : 'English'} (${db.getCommandNames().length} 命令)`
-            );
+            const newLang = applyLanguage(db);
+            // Re-render the diagnostics so their messages pick up the new language
+            if (vscode.window.activeTextEditor) {
+                diagnosticsProvider?.updateDiagnostics(vscode.window.activeTextEditor.document);
+            }
+            lintProvider?.runLint();
+            vscode.window.showInformationMessage(t('config.languageSwitched',
+                newLang === 'zh' ? t('common.chinese') : t('common.english'),
+                db.getCommandNames().length));
         }
         if (e.affectsConfiguration('innovus-tcl.version')) {
             const newVer = cfg.get<string>('version', '25.1');
             db.setVersion(newVer);
             db.reload();
-            vscode.window.showInformationMessage(
-                `Innovus TCL: 已切换至版本 ${db.getVersion() || '(默认)'}，${db.getCommandNames().length} 个命令`
-            );
+            vscode.window.showInformationMessage(t('config.versionSwitched',
+                db.getVersion() || t('common.default'), db.getCommandNames().length));
         }
         if (e.affectsConfiguration('innovus-tcl.enableAITools')) {
             const aiEnabled = cfg.get<boolean>('enableAITools', true);
             if (aiEnabled) {
                 vscode.window.showInformationMessage(
-                    'Innovus TCL: Copilot AI 工具已启用。\n\n在 Copilot Chat 中，你可以:\n• 查询所有 Innovus 命令\n• 获取命令的详细语法和参数\n• 解析 TCL 脚本生成描述\n• 获取跨文件编译分析和 Lint 报告\n\n💡 请重新加载窗口以使 AI 工具生效。',
+                    t('config.aiToolsEnabled'),
                     { modal: true }
                 );
             }
@@ -307,7 +326,7 @@ export function activate(context: vscode.ExtensionContext) {
             if (lintProvider && cfg.get<boolean>('enableCompilation', true)) {
                 lintProvider.runLint();
                 vscode.window.showInformationMessage(
-                    `Innovus TCL: 已重新编译 (${lintProvider.getLastResult()?.units.length || 0} 文件)`
+                    t('config.recompiled', lintProvider.getLastResult()?.units.length || 0)
                 );
             } else if (!cfg.get<boolean>('enableCompilation', true)) {
                 lintProvider?.clear();
@@ -315,81 +334,102 @@ export function activate(context: vscode.ExtensionContext) {
         }
     }));
 
-    // 注册命令：重新加载数据库
+    // Command: reload the database
     subs.push(vscode.commands.registerCommand('innovus-tcl.reloadDB', () => {
         db.reload();
-        vscode.window.showInformationMessage(
-            `Innovus TCL: 已重新加载 ${db.getCommandNames().length} 个命令 (${db.getLanguage() === 'zh' ? '中文' : 'English'})`
-        );
+        vscode.window.showInformationMessage(t('db.reloaded',
+            db.getCommandNames().length,
+            db.getLanguage() === 'zh' ? t('common.chinese') : t('common.english')));
     }));
 
-    // 注册命令：查看插件信息
+    // Command: show the extension information
     subs.push(vscode.commands.registerCommand('innovus-tcl.showHelp', () => {
         const stats = db.getStats();
-        const langLabel = db.getLanguage() === 'zh' ? '中文' : 'English';
-        const versionLabel = stats.version || '(默认)';
+        const langLabel = db.getLanguage() === 'zh' ? t('common.chinese') : t('common.english');
+        const versionLabel = stats.version || t('common.default');
         const level = vscode.workspace.getConfiguration('innovus-tcl').get<string>('diagnosticLevel', 'standard');
         const levelLabels: Record<string, string> = {
-            basic: '基础 (仅括号/引号)',
-            standard: '标准 (+参数校验)',
-            strict: '严格 (+类型验证 +相似建议)'
+            basic: t('info.levelBasic'),
+            standard: t('info.levelStandard'),
+            strict: t('info.levelStrict')
         };
+        const check = (on: unknown) => (on ? '✅' : '❌');
         const msg = [
             `🚀 Innovus TCL Helper v0.4.0`,
             ``,
-            `📦 已加载条目: ${stats.totalEntries} 个`,
-            `   ├─ 命令: ${stats.commands} 个`,
-            `   └─ 变量/模式: ${stats.variables} 个`,
-            `🔢 Innovus 版本: ${versionLabel}`,
-            `🌐 当前语言: ${langLabel}`,
-            `🔍 悬停提示: ${config.get('enableHover') ? '✅' : '❌'}`,
-            `✏️  自动补全: ${config.get('enableCompletion') ? '✅' : '❌'}`,
-            `⚠️  静态检查: ${config.get('enableDiagnostics') ? '✅' : '❌'} (${levelLabels[level] || level})`,
-            `🔗 跨文件编译: ${config.get('enableCompilation') ? '✅' : '❌'}`,
-            `🤖 AI 工具: ${config.get('enableAITools') ? '✅' : '❌'}`,
+            t('info.entriesLoaded', stats.totalEntries),
+            t('info.commands', stats.commands),
+            t('info.variables', stats.variables),
+            t('info.version', versionLabel),
+            t('info.language', langLabel),
+            t('info.hover', check(config.get('enableHover'))),
+            t('info.completion', check(config.get('enableCompletion'))),
+            t('info.diagnostics', check(config.get('enableDiagnostics')), levelLabels[level] || level),
+            t('info.compilation', check(config.get('enableCompilation'))),
+            t('info.aiTools', check(config.get('enableAITools'))),
         ].join('\n');
         vscode.window.showInformationMessage(msg, { modal: true });
     }));
 
-    // 注册命令：切换中/英文
+    // Command: switch the language of both the interface and the documentation
     subs.push(vscode.commands.registerCommand('innovus-tcl.switchLanguage', async () => {
-        const current = db.getLanguage();
-        const newLang: Language = current === 'zh' ? 'en' : 'zh';
         const cfg = vscode.workspace.getConfiguration('innovus-tcl');
-        await cfg.update('language', newLang, vscode.ConfigurationTarget.Global);
-        vscode.window.showInformationMessage(
-            `Innovus TCL: 已切换为${newLang === 'zh' ? '中文' : 'English'} (${db.getCommandNames().length} 命令)`
+        const configured = cfg.get<string>('language', 'en');
+        const picked = await vscode.window.showQuickPick(
+            [
+                {
+                    label: t('lang.en'),
+                    description: configured === 'en' ? t('version.current') : '',
+                    detail: t('lang.enDetail'),
+                    value: 'en'
+                },
+                {
+                    label: t('lang.zh'),
+                    description: configured === 'zh' ? t('version.current') : '',
+                    detail: t('lang.zhDetail'),
+                    value: 'zh'
+                },
+                {
+                    label: t('lang.auto'),
+                    description: configured === 'auto' ? t('version.current') : '',
+                    detail: t('lang.autoDetail'),
+                    value: 'auto'
+                }
+            ],
+            { placeHolder: t('lang.pick') }
         );
+        if (!picked || picked.value === configured) { return; }
+
+        // The onDidChangeConfiguration handler applies the language and notifies
+        await cfg.update('language', picked.value, vscode.ConfigurationTarget.Global);
+        vscode.window.showInformationMessage(t('lang.paletteNote'));
     }));
 
-    // 注册命令：切换帮助显示风格 (Webview ↔ 纯文本)
+    // Command: toggle the help display style (Webview ↔ plain text)
     subs.push(vscode.commands.registerCommand('innovus-tcl.toggleHelpStyle', async () => {
         const cfg = vscode.workspace.getConfiguration('innovus-tcl');
         const current = cfg.get<string>('helpStyle', 'webview');
         const next = current === 'webview' ? 'plain' : 'webview';
         await cfg.update('helpStyle', next, vscode.ConfigurationTarget.Global);
-        const label = next === 'webview'
-            ? (db.getLanguage() === 'zh' ? 'Webview 富文本面板' : 'Webview Rich Panel')
-            : (db.getLanguage() === 'zh' ? '纯文本编辑器' : 'Plain Text Editor');
-        vscode.window.showInformationMessage(`Innovus TCL: 帮助风格 → ${label}`);
+        const label = next === 'webview' ? t('helpStyle.webview') : t('helpStyle.plain');
+        vscode.window.showInformationMessage(t('helpStyle.switched', label));
     }));
 
-    // 注册命令：切换 Innovus 版本
+    // Command: switch the Innovus version
     subs.push(vscode.commands.registerCommand('innovus-tcl.switchVersion', async () => {
         const versions = db.getAvailableVersions();
         const currentVer = db.getVersion();
-        const isZh = db.getLanguage() === 'zh';
 
         const items = versions.map(v => ({
             label: v.label,
             description: v.description,
             detail: v.label === currentVer || (!currentVer && v.label === '25.1')
-                ? (isZh ? '● 当前使用' : '● Current')
+                ? t('version.current')
                 : ''
         }));
 
         const picked = await vscode.window.showQuickPick(items, {
-            placeHolder: isZh ? '选择版本 (test=关闭高亮, 25.1=完整数据)' : 'Select version (test=no highlight, 25.1=full data)'
+            placeHolder: t('version.pick')
         });
 
         if (picked) {
@@ -398,23 +438,20 @@ export function activate(context: vscode.ExtensionContext) {
         }
     }));
 
-    // 注册命令：AI 分析当前 TCL 脚本
+    // Command: AI-analyze the current TCL script
     subs.push(vscode.commands.registerCommand('innovus-tcl.analyzeScript', async () => {
         const editor = vscode.window.activeTextEditor;
         if (!editor || editor.document.languageId !== 'tcl') {
-            vscode.window.showWarningMessage(
-                db.getLanguage() === 'zh' ? '请先打开一个 TCL 文件。' : 'Please open a TCL file first.'
-            );
+            vscode.window.showWarningMessage(t('need.tclFile'));
             return;
         }
 
-        const isZh = db.getLanguage() === 'zh';
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
         const mcpConfigPath = workspaceFolder
             ? path.join(workspaceFolder.uri.fsPath, '.vscode', 'mcp.json')
             : '';
 
-        // 检查 MCP 是否已安装
+        // Check whether MCP is already installed
         let mcpAvailable = false;
         if (mcpConfigPath && fs.existsSync(mcpConfigPath)) {
             try {
@@ -425,43 +462,37 @@ export function activate(context: vscode.ExtensionContext) {
             } catch { /* ignore */ }
         }
 
-        // 构建选项列表
+        // Build the option list
         const options: vscode.QuickPickItem[] = [
             {
-                label: '📋 ' + (isZh ? '拼接文档（本地查看）' : 'Doc Concatenation (Local View)'),
-                description: isZh
-                    ? '将所有命令的完整文档 + 参数对照表拼接为 Markdown'
-                    : 'Concatenate all command docs + parameter comparison as Markdown'
+                label: t('analyze.docLabel'),
+                description: t('analyze.docDesc')
             }
         ];
 
         if (mcpAvailable) {
             options.push({
-                label: '🤖 ' + (isZh ? 'Copilot AI 分析 (MCP)' : 'Copilot AI Analysis (MCP)'),
-                description: isZh
-                    ? '复制分析提示词到剪贴板，粘贴到 Copilot Chat 即可'
-                    : 'Copy analysis prompt to clipboard, paste in Copilot Chat'
+                label: t('analyze.mcpLabel'),
+                description: t('analyze.mcpDesc')
             });
         } else {
             options.push({
-                label: '🔧 ' + (isZh ? '一键安装 MCP 工具' : 'Install MCP Tools'),
-                description: isZh
-                    ? '自动配置 MCP 工具，之后可用 AI 分析脚本'
-                    : 'Auto-configure MCP tools for AI analysis'
+                label: t('analyze.installLabel'),
+                description: t('analyze.installDesc')
             });
         }
 
         const choice = await vscode.window.showQuickPick(options, {
-            placeHolder: isZh ? '选择分析方式' : 'Select analysis mode'
+            placeHolder: t('analyze.pick')
         });
 
         if (!choice) { return; }
 
         const content = editor.document.getText();
-        const sourceLabel = editor.document.uri.fsPath || (isZh ? '当前脚本' : 'current script');
+        const sourceLabel = editor.document.uri.fsPath || t('analyze.currentScript');
 
         if (choice.label.startsWith('📋')) {
-            // 拼接文档模式 — 纯文档，不含 AI 分析任务
+            // Doc concatenation mode — documentation only, no AI analysis task
             const report = buildScriptContextForCommand(content, sourceLabel, false);
             const doc = await vscode.workspace.openTextDocument({
                 content: report,
@@ -472,13 +503,11 @@ export function activate(context: vscode.ExtensionContext) {
                 preview: true
             });
         } else if (choice.label.startsWith('🤖')) {
-            // AI 分析模式 — 复制提示词到剪贴板，不发文件
-            const prompt = buildAiAnalysisPrompt(context.extensionPath, sourceLabel, isZh);
+            // AI analysis mode — copy the prompt to the clipboard, do not send the file
+            const prompt = buildAiAnalysisPrompt(context.extensionPath, sourceLabel);
             await vscode.env.clipboard.writeText(prompt);
             vscode.window.showInformationMessage(
-                isZh
-                    ? '✅ 分析提示词已复制到剪贴板！请粘贴到 Copilot Chat 中。'
-                    : '✅ Analysis prompt copied to clipboard! Paste it in Copilot Chat.',
+                t('analyze.promptCopied'),
                 { modal: true }
             );
         } else {
@@ -486,17 +515,14 @@ export function activate(context: vscode.ExtensionContext) {
         }
     }));
 
-    // 注册命令：列出所有 Innovus 命令
+    // Command: list every Innovus command
     subs.push(vscode.commands.registerCommand('innovus-tcl.listCommands', async () => {
         const allNames = db.getCommandNames();
         const stats = db.getStats();
-        const isZh = db.getLanguage() === 'zh';
 
         const searchTerm = await vscode.window.showInputBox({
-            placeHolder: isZh ? '输入关键词过滤（留空显示全部）' : 'Enter keyword to filter (leave empty for all)',
-            prompt: isZh
-                ? `共 ${stats.commands} 个命令 + ${stats.variables} 个变量/模式`
-                : `${stats.commands} commands + ${stats.variables} variables/modes total`
+            placeHolder: t('list.filterPlaceholder'),
+            prompt: t('list.filterPrompt', stats.commands, stats.variables)
         });
 
         let filtered = allNames;
@@ -514,67 +540,56 @@ export function activate(context: vscode.ExtensionContext) {
             return {
                 label: name,
                 description: info?.summary || '',
-                detail: isCmd
-                    ? (isZh ? '命令' : 'Command')
-                    : (isZh ? '变量/模式' : 'Variable/Mode')
+                detail: isCmd ? t('common.command') : t('common.variableMode')
             };
         });
 
         const picked = await vscode.window.showQuickPick(items, {
             matchOnDescription: true,
             matchOnDetail: true,
-            placeHolder: isZh
-                ? `显示 ${displayNames.length} / ${filtered.length} 个条目`
-                : `Showing ${displayNames.length} / ${filtered.length} items`
+            placeHolder: t('list.showing', displayNames.length, filtered.length)
         });
 
         if (picked) {
-            // 用户选择了一个命令，显示其帮助
+            // The user picked a command, show its help
             showHelp(context, picked.label);
         }
     }));
 
-    // 注册命令：一键安装 Copilot MCP 工具
+    // Command: install the Copilot MCP tools
     subs.push(vscode.commands.registerCommand('innovus-tcl.installMcp', async () => {
-        const isZh = db.getLanguage() === 'zh';
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders || workspaceFolders.length === 0) {
-            vscode.window.showErrorMessage(
-                isZh ? '请先打开一个工作区文件夹。' : 'Please open a workspace folder first.'
-            );
+            vscode.window.showErrorMessage(t('need.workspaceFolder'));
             return;
         }
 
         const workspaceRoot = workspaceFolders[0].uri.fsPath;
 
-        // ---- 步骤 1: 探测 MCP Server 脚本路径 ----
+        // ---- Step 1: locate the MCP server script ----
         const extPath = context.extensionPath;
         let mcpScript = path.join(extPath, 'scripts', 'mcp-server.mjs');
 
-        // 检查文件是否存在
+        // Check whether the file exists
         if (!fs.existsSync(mcpScript)) {
-            // 可能在开发模式下，脚本在项目目录中
+            // In development mode the script may live in the project directory
             const devPath = path.join(extPath, 'scripts', 'mcp-server.mjs');
             if (fs.existsSync(devPath)) {
                 mcpScript = devPath;
             } else {
-                vscode.window.showErrorMessage(
-                    isZh
-                        ? `找不到 MCP Server 脚本。\n预期位置: ${mcpScript}\n\n请确认扩展安装完整。`
-                        : `MCP Server script not found.\nExpected: ${mcpScript}\n\nPlease verify the extension installation.`
-                );
+                vscode.window.showErrorMessage(t('mcp.scriptNotFound', mcpScript));
                 return;
             }
         }
 
-        // ---- 步骤 2: 探测数据目录 ----
+        // ---- Step 2: locate the data directory ----
         let dataRoot = '';
         const cfg = vscode.workspace.getConfiguration('innovus-tcl');
         const configuredRoot = cfg.get<string>('dataRoot', '');
         if (configuredRoot && fs.existsSync(configuredRoot)) {
             dataRoot = configuredRoot;
         } else {
-            // 自动探测: 查找 data/cmds/innovus/ 目录
+            // Auto-detect: look for the data/cmds/innovus/ directory
             const candidates = [
                 path.join(extPath, 'data'),
                 path.join(workspaceRoot, 'data'),
@@ -589,21 +604,17 @@ export function activate(context: vscode.ExtensionContext) {
         }
 
         if (!dataRoot) {
-            vscode.window.showErrorMessage(
-                isZh
-                    ? '找不到 Innovus 命令数据目录。请先在设置中配置 innovus-tcl.dataRoot。'
-                    : 'Cannot find Innovus command data directory. Please configure innovus-tcl.dataRoot in settings first.'
-            );
+            vscode.window.showErrorMessage(t('mcp.dataNotFound'));
             return;
         }
 
-        // ---- 步骤 3: 探测 Node.js ----
+        // ---- Step 3: locate Node.js ----
         const nodeCommand = process.execPath.includes('node') ? process.execPath : 'node';
 
-        // ---- 步骤 4: 选择语言 ----
+        // ---- Step 4: pick the documentation language ----
         const lang = db.getLanguage();
 
-        // ---- 步骤 5: 写入 .vscode/mcp.json ----
+        // ---- Step 5: write .vscode/mcp.json ----
         const vscodeDir = path.join(workspaceRoot, '.vscode');
         if (!fs.existsSync(vscodeDir)) {
             fs.mkdirSync(vscodeDir, { recursive: true });
@@ -611,7 +622,7 @@ export function activate(context: vscode.ExtensionContext) {
 
         const mcpConfigPath = path.join(vscodeDir, 'mcp.json');
 
-        // 检查是否已存在配置
+        // Check for an existing configuration
         let existingConfig: { servers: Record<string, unknown> } = { servers: {} };
         if (fs.existsSync(mcpConfigPath)) {
             try {
@@ -619,10 +630,10 @@ export function activate(context: vscode.ExtensionContext) {
                 if (existing.servers) {
                     existingConfig = existing;
                 }
-            } catch { /* 忽略解析错误，覆盖写入 */ }
+            } catch { /* ignore the parse error and overwrite */ }
         }
 
-        // 添加 innovus-tcl 配置
+        // Add the innovus-tcl configuration
         existingConfig.servers['innovus-tcl'] = {
             type: 'stdio',
             command: nodeCommand,
@@ -635,46 +646,10 @@ export function activate(context: vscode.ExtensionContext) {
 
         fs.writeFileSync(mcpConfigPath, JSON.stringify(existingConfig, null, 2), 'utf-8');
 
-        // ---- 步骤 6: 确认 ----
-        const msg = isZh
-            ? [
-                `✅ MCP 工具安装成功！`,
-                ``,
-                `📁 配置文件: .vscode/mcp.json`,
-                `📜 MCP 脚本: ${mcpScript}`,
-                `📦 数据目录: ${dataRoot}`,
-                `🌐 语言: ${lang === 'zh' ? '中文' : 'English'}`,
-                ``,
-                `🔧 已注册工具:`,
-                `   • innovus_parse_tcl_script — 解析 TCL 脚本 + 命令文档查询`,
-                `   • innovus_lint_tcl_script — TCL 脚本静态检查`,
-                ``,
-                `⚠️ 请重新加载窗口以使 MCP 工具生效:`,
-                `   Ctrl+Shift+P → "Developer: Reload Window"`,
-                ``,
-                `💡 之后在 Copilot Chat 中直接说:`,
-                `   "分析我当前打开的 TCL 脚本"`,
-            ].join('\n')
-            : [
-                `✅ MCP Tools Installed Successfully!`,
-                ``,
-                `📁 Config: .vscode/mcp.json`,
-                `📜 Script: ${mcpScript}`,
-                `📦 Data: ${dataRoot}`,
-                `🌐 Language: ${lang}`,
-                ``,
-                `🔧 Registered Tools:`,
-                `   • innovus_parse_tcl_script — Parse TCL + command docs`,
-                `   • innovus_lint_tcl_script — TCL static lint`,
-                ``,
-                `⚠️ Reload window for MCP tools to take effect:`,
-                `   Ctrl+Shift+P → "Developer: Reload Window"`,
-                ``,
-                `💡 Then in Copilot Chat, just say:`,
-                `   "Analyze my current TCL script"`,
-            ].join('\n');
+        // ---- Step 6: confirm ----
+        const msg = t('mcp.installed', mcpScript, dataRoot, lang);
 
-        const reloadAction = isZh ? '🔄 重新加载窗口' : '🔄 Reload Window';
+        const reloadAction = t('mcp.reloadWindow');
         const result = await vscode.window.showInformationMessage(msg, { modal: true }, reloadAction);
 
         if (result === reloadAction) {
@@ -682,70 +657,48 @@ export function activate(context: vscode.ExtensionContext) {
         }
     }));
 
-    // 注册命令：安装 Agent Skills
+    // Command: install the agent skills
     subs.push(vscode.commands.registerCommand('innovus-tcl.installSkills', async () => {
-        const isZh = db.getLanguage() === 'zh';
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders || workspaceFolders.length === 0) {
-            vscode.window.showErrorMessage(
-                isZh ? '请先打开一个工作区文件夹。' : 'Please open a workspace folder first.'
-            );
+            vscode.window.showErrorMessage(t('need.workspaceFolder'));
             return;
         }
 
         installAgentSkills(context.extensionPath);
 
-        const msg = [
-            isZh ? '✅ Agent Skill 已安装' : '✅ Agent Skill Installed',
-            '',
-            '`.agents/skills/innovus-tcl-helper/SKILL.md`',
-            '',
-            isZh
-                ? '💡 使用 `/skills` 查看已安装的 skill。在 Copilot Chat 中输入 Innovus TCL 问题自动激活。'
-                : '💡 Use `/skills` to verify. Ask Innovus TCL questions in Copilot Chat.',
-        ].join('\n');
-
-        vscode.window.showInformationMessage(msg, { modal: true });
+        vscode.window.showInformationMessage(t('skills.installed'), { modal: true });
     }));
 
-    // 注册命令：运行跨文件编译 Lint
+    // Command: run the cross-file compilation lint
     subs.push(vscode.commands.registerCommand('innovus-tcl.runLint', () => {
         if (!lintProvider) {
-            vscode.window.showWarningMessage(
-                db.getLanguage() === 'zh'
-                    ? '跨文件编译分析未启用。请在设置中启用 innovus-tcl.enableCompilation。'
-                    : 'Cross-file compilation is disabled. Enable innovus-tcl.enableCompilation in settings.'
-            );
+            vscode.window.showWarningMessage(t('lint.disabled'));
             return;
         }
         lintProvider.runLint();
         const result = lintProvider.getLastResult();
-        const isZh = db.getLanguage() === 'zh';
         if (result) {
-            const msg = isZh
-                ? `✅ 编译完成: ${result.units.length} 文件, ${Array.from(result.variables.values()).reduce((s, v) => s + v.length, 0)} 变量, ${result.errors.length} 错误, ${result.warnings.length} 警告`
-                : `✅ Compilation done: ${result.units.length} files, ${Array.from(result.variables.values()).reduce((s, v) => s + v.length, 0)} variables, ${result.errors.length} errors, ${result.warnings.length} warnings`;
-            vscode.window.showInformationMessage(msg);
+            vscode.window.showInformationMessage(t('lint.done',
+                result.units.length,
+                Array.from(result.variables.values()).reduce((s, v) => s + v.length, 0),
+                result.errors.length,
+                result.warnings.length));
         }
     }));
 
-    // 注册命令：显示 Lint 报告
+    // Command: show the lint report
     subs.push(vscode.commands.registerCommand('innovus-tcl.showLintReport', async () => {
         if (!lintProvider || !lintProvider.getLastResult()) {
-            vscode.window.showWarningMessage(
-                db.getLanguage() === 'zh'
-                    ? '请先运行编译分析 (Cmd+Shift+P → Innovus TCL: 运行跨文件 Lint)。'
-                    : 'Run compilation first (Cmd+Shift+P → Innovus TCL: Run Cross-file Lint).'
-            );
+            vscode.window.showWarningMessage(t('lint.runFirst'));
             return;
         }
-        const isZh = db.getLanguage() === 'zh';
         const format = await vscode.window.showQuickPick(
             [
-                { label: '📝 Markdown', description: isZh ? '格式化的 Lint 报告' : 'Formatted lint report' },
-                { label: '📊 JSON', description: isZh ? '结构化 JSON 报告' : 'Structured JSON report' }
+                { label: '📝 Markdown', description: t('lint.formatMarkdown') },
+                { label: '📊 JSON', description: t('lint.formatJson') }
             ],
-            { placeHolder: isZh ? '选择报告格式' : 'Select report format' }
+            { placeHolder: t('lint.formatPick') }
         );
 
         if (!format) { return; }
@@ -755,7 +708,7 @@ export function activate(context: vscode.ExtensionContext) {
         );
 
         if (format.label.includes('JSON')) {
-            // JSON 格式化显示
+            // Pretty-print the JSON
             const formatted = JSON.stringify(JSON.parse(report), null, 2);
             const doc = await vscode.workspace.openTextDocument({
                 content: formatted,
@@ -777,39 +730,31 @@ export function activate(context: vscode.ExtensionContext) {
         }
     }));
 
-    // 注册命令：打开 .f 文件
+    // Command: open the .f file
     subs.push(vscode.commands.registerCommand('innovus-tcl.openFFile', async () => {
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders || workspaceFolders.length === 0) {
-            vscode.window.showWarningMessage(
-                db.getLanguage() === 'zh' ? '请先打开一个工作区。' : 'Please open a workspace first.'
-            );
+            vscode.window.showWarningMessage(t('need.workspace'));
             return;
         }
         const fFile = vscode.workspace.getConfiguration('innovus-tcl')
             .get<string>('fFile', 'tcl.f');
         const fFilePath = path.join(workspaceFolders[0].uri.fsPath, fFile);
 
-        // 如果 .f 文件不存在，创建一个空的
+        // Create an empty .f file when it does not exist
         if (!fs.existsSync(fFilePath)) {
-            const defaultContent = db.getLanguage() === 'zh'
-                ? '# Innovus TCL 编译文件列表\n# 每行一个 .tcl 文件路径（相对路径）\n# 按顺序从上到下编译\n'
-                : '# Innovus TCL compilation file list\n# One .tcl file per line (relative path)\n# Compiled in order from top to bottom\n';
-            fs.writeFileSync(fFilePath, defaultContent, 'utf-8');
+            fs.writeFileSync(fFilePath, t('ffile.defaultContent'), 'utf-8');
         }
 
         const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(fFilePath));
         await vscode.window.showTextDocument(doc);
     }));
 
-    // 注册命令：设置 .f 文件路径
+    // Command: set the .f file path
     subs.push(vscode.commands.registerCommand('innovus-tcl.setFFile', async () => {
-        const isZh = db.getLanguage() === 'zh';
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders || workspaceFolders.length === 0) {
-            vscode.window.showWarningMessage(
-                isZh ? '请先打开一个工作区。' : 'Please open a workspace first.'
-            );
+            vscode.window.showWarningMessage(t('need.workspace'));
             return;
         }
 
@@ -817,72 +762,53 @@ export function activate(context: vscode.ExtensionContext) {
             .get<string>('fFile', 'tcl.f');
 
         const newFfile = await vscode.window.showInputBox({
-            prompt: isZh
-                ? '输入 .f 文件路径（相对于工作区根目录）'
-                : 'Enter .f file path (relative to workspace root)',
+            prompt: t('ffile.prompt'),
             value: currentFfile,
-            placeHolder: '例如: a.f, temp/a.f, subdir/proj.f',
+            placeHolder: t('ffile.placeholder'),
             validateInput: (value) => {
                 if (!value || !value.trim()) {
-                    return isZh ? '路径不能为空' : 'Path cannot be empty';
+                    return t('ffile.emptyPath');
                 }
                 if (!value.endsWith('.f')) {
-                    return isZh ? '文件应以 .f 结尾' : 'File should end with .f';
+                    return t('ffile.badSuffix');
                 }
-                return null; // 通过
+                return null; // Valid
             }
         });
 
-        if (newFfile === undefined) { return; } // 用户取消
+        if (newFfile === undefined) { return; } // The user cancelled
 
         const trimmed = newFfile.trim();
 
-        // 写入配置（Workspace 级别）
+        // Write the configuration (workspace scope)
         const config = vscode.workspace.getConfiguration('innovus-tcl');
         try {
             await config.update('fFile', trimmed, vscode.ConfigurationTarget.Workspace);
-            vscode.window.showInformationMessage(
-                isZh
-                    ? `✅ .f 文件路径已更新为: ${trimmed}`
-                    : `✅ .f file path updated to: ${trimmed}`
-            );
+            vscode.window.showInformationMessage(t('ffile.updated', trimmed));
 
-            // 自动重新运行 Lint
+            // Re-run the lint automatically
             if (lintProvider) {
                 lintProvider.runLint();
                 const unitCount = lintProvider.getLastResult()?.units.length || 0;
-                vscode.window.showInformationMessage(
-                    isZh
-                        ? `🔄 已使用新 .f 文件重新编译 (${unitCount} 个文件)`
-                        : `🔄 Recompiled with new .f file (${unitCount} files)`
-                );
+                vscode.window.showInformationMessage(t('ffile.recompiled', unitCount));
             }
         } catch (e: any) {
-            vscode.window.showErrorMessage(
-                isZh
-                    ? `❌ 设置失败: ${e.message}`
-                    : `❌ Failed to set: ${e.message}`
-            );
+            vscode.window.showErrorMessage(t('ffile.setFailed', e.message));
         }
     }));
 
-    // 注册命令：运行 TCL 脚本
+    // Command: run the TCL script
     subs.push(vscode.commands.registerCommand('innovus-tcl.runScript', async () => {
-        const isZh = db.getLanguage() === 'zh';
         const editor = vscode.window.activeTextEditor;
 
         if (!editor || editor.document.languageId !== 'tcl') {
-            vscode.window.showWarningMessage(
-                isZh ? '请先打开一个 TCL 文件。' : 'Please open a TCL file first.'
-            );
+            vscode.window.showWarningMessage(t('need.tclFile'));
             return;
         }
 
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders || workspaceFolders.length === 0) {
-            vscode.window.showWarningMessage(
-                isZh ? '请先打开一个工作区。' : 'Please open a workspace first.'
-            );
+            vscode.window.showWarningMessage(t('need.workspace'));
             return;
         }
 
@@ -890,20 +816,18 @@ export function activate(context: vscode.ExtensionContext) {
         const content = document.getText();
         const workDir = path.dirname(document.uri.fsPath);
 
-        // 显示输出通道
+        // Show the output channel
         runChannel.clear();
         runChannel.show(true);
 
         runChannel.appendLine('═══════════════════════════════════════');
-        runChannel.appendLine(isZh ? '  Innovus TCL 脚本运行' : '  Innovus TCL Script Run');
+        runChannel.appendLine(t('run.scriptHeader'));
         runChannel.appendLine('═══════════════════════════════════════');
-        runChannel.appendLine(isZh
-            ? `  文件: ${path.basename(document.fileName)}`
-            : `  File: ${path.basename(document.fileName)}`);
-        runChannel.appendLine(`  工作目录: ${workDir}`);
+        runChannel.appendLine(t('run.file', path.basename(document.fileName)));
+        runChannel.appendLine(t('run.workDir', workDir));
         runChannel.appendLine('');
 
-        // 查找 tclsh 并执行
+        // Find tclsh and execute
         const runner = getRunner();
         runner.language = db.getLanguage() === 'zh' ? 'zh' : 'en';
         const configTclshPath = vscode.workspace.getConfiguration('innovus-tcl')
@@ -911,19 +835,14 @@ export function activate(context: vscode.ExtensionContext) {
         const tclsh = runner.findTclsh(context.extensionPath, configTclshPath);
 
         if (!tclsh) {
-            const guide = getTclshInstallGuide(isZh);
-            runChannel.appendLine(isZh ? '❌ 未找到 tclsh 解释器' : '❌ tclsh interpreter not found');
-            runChannel.appendLine(guide);
-            runChannel.appendLine(isZh
-                ? '\n💡 提示: 在 VS Code 设置中搜索 innovus-tcl.tclshPath 配置自定义路径'
-                : '\n💡 Tip: Search innovus-tcl.tclshPath in VS Code settings to configure a custom path');
+            runChannel.appendLine(t('tclsh.notFound'));
+            runChannel.appendLine(getTclshInstallGuide());
+            runChannel.appendLine(t('tclsh.pathTip'));
             return;
         }
 
-        runChannel.appendLine(isZh
-            ? `🔧 使用解释器: ${tclsh}`
-            : `🔧 Using interpreter: ${tclsh}`);
-        runChannel.appendLine(isZh ? '⚡ 执行中...' : '⚡ Executing...');
+        runChannel.appendLine(t('run.usingInterpreter', tclsh));
+        runChannel.appendLine(t('run.executing'));
         runChannel.appendLine('');
 
         try {
@@ -941,61 +860,48 @@ export function activate(context: vscode.ExtensionContext) {
                 configTclshPath, outputConfig, simOutputMode
             );
 
-            // 打印被拦截的 Innovus 命令
+            // Print the intercepted Innovus commands
             if (result.innovusCommands.length > 0) {
-                runChannel.appendLine(isZh
-                    ? `📋 检测到 ${result.innovusCommands.length} 个 Innovus 专有命令（以文档输出代替执行）:`
-                    : `📋 ${result.innovusCommands.length} Innovus commands detected (doc output instead of execution):`);
+                runChannel.appendLine(t('run.commandsDetected', result.innovusCommands.length));
                 runChannel.appendLine(`   ${result.innovusCommands.join(', ')}`);
                 runChannel.appendLine('');
             }
 
-            // 打印 stdout
+            // Print stdout
             if (result.stdout.trim()) {
-                runChannel.appendLine('── 运行输出 ──');
+                runChannel.appendLine(t('run.stdout'));
                 runChannel.appendLine(result.stdout);
             }
 
-            // 打印 stderr
+            // Print stderr
             if (result.stderr.trim()) {
-                runChannel.appendLine('── 错误输出 ──');
+                runChannel.appendLine(t('run.stderr'));
                 runChannel.appendLine(result.stderr);
             }
 
-            // 打印结果摘要
+            // Print the result summary
             runChannel.appendLine('');
             runChannel.appendLine('───────────────────────────────────────');
             if (result.success) {
-                runChannel.appendLine(isZh
-                    ? `✅ 执行成功 (${result.duration}ms)`
-                    : `✅ Success (${result.duration}ms)`);
+                runChannel.appendLine(t('run.success', result.duration));
             } else {
-                runChannel.appendLine(isZh
-                    ? `⚠️ 执行完成（有错误） (${result.duration}ms)`
-                    : `⚠️ Completed with errors (${result.duration}ms)`);
+                runChannel.appendLine(t('run.completedWithErrors', result.duration));
             }
-            runChannel.appendLine(`   退出码: ${result.exitCode}`);
+            runChannel.appendLine(t('run.exitCode', result.exitCode));
             if (result.outputFile) {
-                runChannel.appendLine(isZh
-                    ? `   📄 输出文件: ${result.outputFile}`
-                    : `   📄 Output: ${result.outputFile}`);
+                runChannel.appendLine(t('run.outputFile', result.outputFile));
             }
 
         } catch (e: any) {
-            runChannel.appendLine(isZh
-                ? `❌ 执行异常: ${e.message}`
-                : `❌ Execution error: ${e.message}`);
+            runChannel.appendLine(t('run.exception', e.message));
         }
     }));
 
-    // 注册命令：运行整个 .f 项目
+    // Command: run the whole .f project
     subs.push(vscode.commands.registerCommand('innovus-tcl.runProject', async () => {
-        const isZh = db.getLanguage() === 'zh';
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders || workspaceFolders.length === 0) {
-            vscode.window.showWarningMessage(
-                isZh ? '请先打开一个工作区。' : 'Please open a workspace first.'
-            );
+            vscode.window.showWarningMessage(t('need.workspace'));
             return;
         }
 
@@ -1005,18 +911,16 @@ export function activate(context: vscode.ExtensionContext) {
         const fFilePath = path.join(wsRoot, fFile);
 
         if (!fs.existsSync(fFilePath)) {
-            vscode.window.showErrorMessage(
-                isZh ? `.f 文件不存在: ${fFile}` : `.f file not found: ${fFile}`
-            );
+            vscode.window.showErrorMessage(t('ffile.notFound', fFile));
             return;
         }
 
         runChannel.clear();
         runChannel.show(true);
         runChannel.appendLine('═══════════════════════════════════════');
-        runChannel.appendLine(isZh ? '  Innovus TCL 项目运行' : '  Innovus TCL Project Run');
+        runChannel.appendLine(t('run.projectHeader'));
         runChannel.appendLine('═══════════════════════════════════════');
-        runChannel.appendLine(isZh ? `  .f 文件: ${fFile}` : `  .f File: ${fFile}`);
+        runChannel.appendLine(t('run.fFile', fFile));
         runChannel.appendLine('');
 
         const runner = getRunner();
@@ -1025,17 +929,14 @@ export function activate(context: vscode.ExtensionContext) {
             .get<string>('tclshPath', '');
         const tclsh2 = runner.findTclsh(context.extensionPath, configTclshPath2);
         if (!tclsh2) {
-            const guide = getTclshInstallGuide(isZh);
-            runChannel.appendLine(isZh ? '❌ 未找到 tclsh 解释器' : '❌ tclsh interpreter not found');
-            runChannel.appendLine(guide);
-            runChannel.appendLine(isZh
-                ? '\n💡 提示: 在 VS Code 设置中搜索 innovus-tcl.tclshPath 配置自定义路径'
-                : '\n💡 Tip: Search innovus-tcl.tclshPath in VS Code settings to configure a custom path');
+            runChannel.appendLine(t('tclsh.notFound'));
+            runChannel.appendLine(getTclshInstallGuide());
+            runChannel.appendLine(t('tclsh.pathTip'));
             return;
         }
 
-        runChannel.appendLine(isZh ? `🔧 ${tclsh2}` : `🔧 ${tclsh2}`);
-        runChannel.appendLine(isZh ? '⚡ 执行中...' : '⚡ Executing...');
+        runChannel.appendLine(`🔧 ${tclsh2}`);
+        runChannel.appendLine(t('run.executing'));
         runChannel.appendLine('');
 
         try {
@@ -1053,7 +954,7 @@ export function activate(context: vscode.ExtensionContext) {
                 configTclshPath2, outputConfig2, simOutputMode
             );
 
-            // 显示完整的运行输出（去标记行）
+            // Show the full run output (with the marker lines removed)
             const firstR = result.results[0];
             const cleanOutput = firstR?.stdout
                 ?.split('\n')
@@ -1061,61 +962,59 @@ export function activate(context: vscode.ExtensionContext) {
                 .join('\n')
                 .trim() || '';
             if (cleanOutput) {
-                runChannel.appendLine('── 运行输出 ──');
+                runChannel.appendLine(t('run.stdout'));
                 runChannel.appendLine(cleanOutput);
             }
 
-            // 逐文件状态
+            // Per-file status
             runChannel.appendLine('');
-            runChannel.appendLine('── 文件状态 ──');
-            const SKIP_MSG = isZh ? '前置文件执行失败，未运行到此文件' : 'Skipped due to prior file error';
+            runChannel.appendLine(t('run.fileStatus'));
+            const skipMsg = skippedMessage();
             for (const r of result.results) {
-                const isSkipped = !r.success && r.stderr === SKIP_MSG;
+                const isSkipped = !r.success && r.stderr === skipMsg;
                 const status = r.success ? '✅' : (isSkipped ? '⏭' : '❌');
                 const cmdInfo = r.innovusCommands.length > 0
                     ? ` (${r.innovusCommands.length} cmds)` : '';
                 const fileInfo = r.outputFile ? ` → ${r.outputFile}` : '';
                 runChannel.appendLine(`${status} ${r.filePath} [${r.duration}ms]${cmdInfo}${fileInfo}`);
                 if (!r.success && r.stderr && !isSkipped) {
-                    // 多行错误逐行显示
+                    // Print multi-line errors one line at a time
                     const errLines = r.stderr.split('\n');
                     for (const line of errLines) {
                         runChannel.appendLine(`   ⚠ ${line}`);
                     }
-                    // 提取行号，生成可点击的文件:行号 链接
+                    // Extract the line number and emit a clickable file:line link
                     const lineMatch = r.stderr.match(/\(file\s+"([^"]+)"\s+line\s+(\d+)\)/);
                     if (lineMatch) {
                         const linkedFile = lineMatch[1];
                         const lineNum = lineMatch[2];
-                        // VS Code Output Channel (log:true) 自动识别 file:line 格式
+                        // The VS Code output channel (log:true) recognizes the file:line format
                         runChannel.appendLine(`   🔗 ${linkedFile}:${lineNum}`);
                     }
                 } else if (isSkipped) {
-                    runChannel.appendLine(`   └─ ${SKIP_MSG}`);
+                    runChannel.appendLine(`   └─ ${skipMsg}`);
                 }
             }
 
             runChannel.appendLine('');
             runChannel.appendLine('───────────────────────────────────────');
-            runChannel.appendLine(isZh
-                ? `📊 ${result.fileCount} 个文件, ${result.errorCount} 个错误, ${result.totalDuration}ms`
-                : `📊 ${result.fileCount} files, ${result.errorCount} errors, ${result.totalDuration}ms`);
+            runChannel.appendLine(t('run.projectSummary',
+                result.fileCount, result.errorCount, result.totalDuration));
             if (result.success) {
-                runChannel.appendLine(isZh ? '✅ 全部通过' : '✅ All passed');
+                runChannel.appendLine(t('run.allPassed'));
             }
         } catch (e: any) {
-            runChannel.appendLine(isZh ? `❌ ${e.message}` : `❌ ${e.message}`);
+            runChannel.appendLine(`❌ ${e.message}`);
         }
     }));
 
-    // 注册命令：编辑 AI 提示词
+    // Command: edit the AI prompt
     subs.push(vscode.commands.registerCommand('innovus-tcl.editPrompt', async () => {
-        const isZh = db.getLanguage() === 'zh';
-        const langDir = isZh ? 'cn' : 'en';
+        const langDir = db.getLanguage() === 'zh' ? 'cn' : 'en';
         const cachePath = path.join(context.extensionPath, 'data', 'cache', langDir, 'ai-prompt.md');
         const systemPath = path.join(context.extensionPath, 'prompts', langDir, 'ai-analysis.md');
 
-        // 读取系统默认 + 用户默认
+        // Read the system default and the user default
         let systemPrompt = '';
         try { systemPrompt = fs.readFileSync(systemPath, 'utf-8').trim(); } catch { /* ignore */ }
         let userPrompt = '';
@@ -1125,97 +1024,78 @@ export function activate(context: vscode.ExtensionContext) {
         }
 
         const activeSource = userPrompt
-            ? (isZh ? `（当前：用户默认 data/cache/${langDir}/ai-prompt.md）` : `(Active: user default data/cache/${langDir}/ai-prompt.md)`)
-            : (isZh ? `（当前：系统默认 prompts/${langDir}/ai-analysis.md）` : `(Active: system default prompts/${langDir}/ai-analysis.md)`);
+            ? t('prompt.activeUser', langDir)
+            : t('prompt.activeSystem', langDir);
 
-        const actionEdit = isZh ? '✏️ 编辑用户默认提示词' : '✏️ Edit User Default';
-        const actionReset = isZh ? '🔄 恢复系统默认' : '🔄 Reset to System Default';
-        const actionView = isZh ? '👁️ 查看当前生效提示词' : '👁️ View Active Prompt';
+        const actionEdit = t('prompt.actionEdit');
+        const actionReset = t('prompt.actionReset');
+        const actionView = t('prompt.actionView');
 
         const choice = await vscode.window.showQuickPick(
             [
-                { label: actionEdit, description: isZh ? `编辑 data/cache/${langDir}/ai-prompt.md` : `Edit data/cache/${langDir}/ai-prompt.md` },
-                { label: actionReset, description: isZh ? `删除用户提示词，回退到 prompts/${langDir}/ai-analysis.md` : `Delete user prompt, fall back to prompts/${langDir}/ai-analysis.md` },
+                { label: actionEdit, description: t('prompt.editDesc', langDir) },
+                { label: actionReset, description: t('prompt.resetDesc', langDir) },
                 { label: actionView, description: activeSource }
             ],
-            { placeHolder: isZh ? '选择操作' : 'Select action' }
+            { placeHolder: t('prompt.pick') }
         );
 
         if (!choice) { return; }
 
         if (choice.label === actionEdit) {
-            // 确保 cache 目录存在
+            // Make sure the cache directory exists
             const cacheDir = path.dirname(cachePath);
             if (!fs.existsSync(cacheDir)) { fs.mkdirSync(cacheDir, { recursive: true }); }
 
-            // 如果用户还没创建过，从系统默认复制一份
+            // Seed it from the system default when the user has not created one yet
             if (!hasUserPrompt) {
-                fs.writeFileSync(cachePath, systemPrompt || (isZh ? '# 在此处编写你的自定义 AI 分析提示词\n' : '# Write your custom AI analysis prompt here\n'), 'utf-8');
+                fs.writeFileSync(cachePath, systemPrompt || t('prompt.seed'), 'utf-8');
             }
 
             const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(cachePath));
             await vscode.window.showTextDocument(doc);
-            vscode.window.showInformationMessage(
-                isZh
-                    ? '💡 编辑后 Ctrl+S 保存即可。此文件会覆盖系统默认提示词。'
-                    : '💡 Edit and Ctrl+S to save. This file overrides the system default prompt.'
-            );
+            vscode.window.showInformationMessage(t('prompt.editHint'));
         } else if (choice.label === actionReset) {
             if (hasUserPrompt) {
                 fs.unlinkSync(cachePath);
-                vscode.window.showInformationMessage(
-                    isZh
-                        ? `✅ 已删除用户提示词，恢复为系统默认 prompts/${langDir}/ai-analysis.md。`
-                        : `✅ User prompt deleted. Restored to system default prompts/${langDir}/ai-analysis.md.`
-                );
+                vscode.window.showInformationMessage(t('prompt.reset', langDir));
             } else {
-                vscode.window.showInformationMessage(
-                    isZh
-                        ? '当前已是系统默认提示词，无需恢复。'
-                        : 'Already using system default prompt.'
-                );
+                vscode.window.showInformationMessage(t('prompt.alreadyDefault'));
             }
         } else {
-            // View current
-            const active = userPrompt || systemPrompt || (isZh ? '(无提示词)' : '(no prompt)');
+            // View the active prompt
+            const active = userPrompt || systemPrompt || t('prompt.none');
             const source = userPrompt
-                ? (isZh ? `来源：data/cache/${langDir}/ai-prompt.md` : `Source: data/cache/${langDir}/ai-prompt.md`)
-                : (isZh ? `来源：prompts/${langDir}/ai-analysis.md（系统默认）` : `Source: prompts/${langDir}/ai-analysis.md (system default)`);
+                ? t('prompt.sourceUser', langDir)
+                : t('prompt.sourceSystem', langDir);
             const viewDoc = await vscode.workspace.openTextDocument({
-                content: `# ${isZh ? '当前生效 AI 分析提示词' : 'Active AI Analysis Prompt'}\n\n> ${source}\n\n${active}`,
+                content: `# ${t('prompt.viewTitle')}\n\n> ${source}\n\n${active}`,
                 language: 'markdown'
             });
             await vscode.window.showTextDocument(viewDoc, { preview: true });
         }
     }));
 
-    // 注册命令：打开示例 TCL 脚本
+    // Command: open an example TCL script
     subs.push(vscode.commands.registerCommand('innovus-tcl.openExample', async () => {
-        const isZh = db.getLanguage() === 'zh';
         const exampleDir = path.join(context.extensionPath, 'data', 'example', 'innovus');
 
         if (!fs.existsSync(exampleDir)) {
-            vscode.window.showErrorMessage(
-                isZh
-                    ? `示例目录不存在: ${exampleDir}`
-                    : `Example directory not found: ${exampleDir}`
-            );
+            vscode.window.showErrorMessage(t('example.dirMissing', exampleDir));
             return;
         }
 
-        // 读取所有 .tcl 文件
+        // Read every .tcl file
         const tclFiles = fs.readdirSync(exampleDir)
             .filter(f => f.endsWith('.tcl'))
             .sort();
 
         if (tclFiles.length === 0) {
-            vscode.window.showInformationMessage(
-                isZh ? '示例目录中没有 .tcl 文件。' : 'No .tcl files in example directory.'
-            );
+            vscode.window.showInformationMessage(t('example.none'));
             return;
         }
 
-        // 预览每份文件的前几行作为描述
+        // Preview the first few lines of every file as its description
         const items = tclFiles.map(f => {
             const filePath = path.join(exampleDir, f);
             let preview = '';
@@ -1233,9 +1113,7 @@ export function activate(context: vscode.ExtensionContext) {
 
         const picked = await vscode.window.showQuickPick(items, {
             matchOnDescription: true,
-            placeHolder: isZh
-                ? `选择示例脚本 (${tclFiles.length} 个文件)`
-                : `Select example script (${tclFiles.length} files)`
+            placeHolder: t('example.pick', tclFiles.length)
         });
 
         if (picked) {
@@ -1244,7 +1122,7 @@ export function activate(context: vscode.ExtensionContext) {
         }
     }));
 
-    // 清理
+    // Cleanup
     subs.push({ dispose: () => diagnosticsProvider?.dispose() });
     subs.push({ dispose: () => lintProvider?.dispose() });
 
@@ -1252,26 +1130,27 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 /**
- * 构建 AI 分析提示词（复制到剪贴板，用户粘贴到 Copilot Chat）
+ * Build the AI analysis prompt (copied to the clipboard for the user to paste
+ * into Copilot Chat).
  *
- * 优先级:
- *   1. VS Code 设置 innovus-tcl.aiPrompt（最高）
- *   2. data/cache/{cn|en}/ai-prompt.md（用户默认）
- *   3. prompts/{cn|en}/ai-analysis.md（系统默认，随扩展发布）
+ * Priority:
+ *   1. The VS Code setting innovus-tcl.aiPrompt (highest)
+ *   2. data/cache/{cn|en}/ai-prompt.md (user default)
+ *   3. prompts/{cn|en}/ai-analysis.md (system default, shipped with the extension)
  */
-function buildAiAnalysisPrompt(extensionPath: string, sourceLabel: string, isZh: boolean): string {
-    const langDir = isZh ? 'cn' : 'en';
+function buildAiAnalysisPrompt(extensionPath: string, sourceLabel: string): string {
+    const langDir = getDB().getLanguage() === 'zh' ? 'cn' : 'en';
     const cachePath = path.join(extensionPath, 'data', 'cache', langDir, 'ai-prompt.md');
     const systemPath = path.join(extensionPath, 'prompts', langDir, 'ai-analysis.md');
 
-    // 1. VS Code 设置
+    // 1. The VS Code setting
     const cfg = vscode.workspace.getConfiguration('innovus-tcl');
     const customPrompt = cfg.get<string>('aiPrompt', '');
     if (customPrompt) {
         return customPrompt.replace(/\{script_name\}/g, sourceLabel);
     }
 
-    // 2. 用户默认 (data/cache/ai-prompt.md)
+    // 2. The user default (data/cache/ai-prompt.md)
     if (cachePath && fs.existsSync(cachePath)) {
         try {
             const userPrompt = fs.readFileSync(cachePath, 'utf-8').trim();
@@ -1281,7 +1160,7 @@ function buildAiAnalysisPrompt(extensionPath: string, sourceLabel: string, isZh:
         } catch { /* fall through */ }
     }
 
-    // 3. 系统默认 (prompts/ai-analysis.md)
+    // 3. The system default (prompts/ai-analysis.md)
     if (systemPath && fs.existsSync(systemPath)) {
         try {
             const sysPrompt = fs.readFileSync(systemPath, 'utf-8').trim();
@@ -1289,10 +1168,8 @@ function buildAiAnalysisPrompt(extensionPath: string, sourceLabel: string, isZh:
         } catch { /* fall through */ }
     }
 
-    // 硬兜底
-    return isZh
-        ? `请分析 Innovus TCL 脚本 \`${sourceLabel}\`。调用 innovus_lint_tcl_script 和 innovus_parse_tcl_script MCP 工具，基于返回的文档进行分析，输出 Markdown 代码块。`
-        : `Analyze the Innovus TCL script \`${sourceLabel}\`. Call innovus_lint_tcl_script and innovus_parse_tcl_script MCP tools, analyze based on returned docs, output in Markdown code block.`;
+    // Hard fallback
+    return t('analyze.fallbackPrompt', sourceLabel);
 }
 
 export function deactivate() {
@@ -1305,76 +1182,11 @@ export function deactivate() {
 }
 
 /**
- * 生成 MCP 工具配置指南
+ * Generate the MCP tool configuration guide
  */
-function generateMcpGuide(isZh: boolean): string {
-    const extPath = '[扩展安装路径]/fd-echoro.innovus-tcl-enhance-[版本号]';
-    return isZh ? `# 🔧 Innovus TCL MCP 工具配置指南
-
-## 什么是 MCP 工具？
-
-MCP (Model Context Protocol) 允许 Copilot 直接调用扩展提供的工具。配置后，在 Copilot Chat 中：
-- Copilot 可以**自动**调用 \`innovus_parse_tcl_script\` 解析 TCL 脚本并获取命令文档
-- Copilot 可以**自动**调用 \`innovus_lint_tcl_script\` 检查 TCL 脚本错误
-
-这样 Copilot 就能基于**真实命令文档**写出低幻觉的 TCL 代码。
-
-## 配置步骤
-
-### 1. 找到 MCP Server 脚本路径
-
-MCP Server 脚本位于扩展目录中：
-\`\`\`
-${extPath}/scripts/mcp-server.mjs
-\`\`\`
-
-### 2. 找到数据目录路径
-
-数据目录包含 Innovus 命令的 JSON 文档，通常位于：
-\`\`\`
-/path/to/data_base
-\`\`\`
-
-### 3. 配置 VS Code
-
-在项目根目录创建 \`.vscode/mcp.json\`：
-
-\`\`\`json
-{
-    "servers": {
-        "innovus-tcl": {
-            "type": "stdio",
-            "command": "node",
-            "args": [
-                "${extPath}/scripts/mcp-server.mjs",
-                "--data-root",
-                "/path/to/data_base",
-                "--lang",
-                "zh"
-            ]
-        }
-    }
-}
-\`\`\`
-
-### 4. 重新加载 VS Code 窗口
-
-\`Ctrl+Shift+P\` → \`Developer: Reload Window\`
-
-### 5. 在 Copilot Chat 中测试
-
-打开 Copilot Chat，输入：
-> 分析我当前打开的 TCL 脚本
-
-Copilot 会自动调用 MCP 工具获取命令文档并进行 AI 分析。
-
-## MCP 工具列表
-
-| 工具名 | 功能 |
-|--------|------|
-| \`innovus_parse_tcl_script\` | 解析 TCL 脚本，返回所有命令的完整文档 + 参数对照表 |
-| \`innovus_lint_tcl_script\` | 静态检查 TCL 脚本（括号/引号/命令参数） |
-` : `# 🔧 Innovus TCL MCP Tool Configuration Guide
+function generateMcpGuide(): string {
+    const extPath = '[extension install path]/fd-echoro.innovus-tcl-enhance-[version]';
+    return `# 🔧 Innovus TCL MCP Tool Configuration Guide
 
 ## What are MCP Tools?
 
@@ -1415,7 +1227,7 @@ Create \`.vscode/mcp.json\` in your project root:
                 "--data-root",
                 "/path/to/data_base",
                 "--lang",
-                "zh"
+                "en"
             ]
         }
     }

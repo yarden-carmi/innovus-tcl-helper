@@ -1,6 +1,18 @@
 #!/usr/bin/env node
 /**
- * 打包前预处理：构建 DB 文件 + 确保目录结构
+ * Pre-packaging step:
+ *   1. Make sure the data/ directory structure exists
+ *   2. Copy the command documentation from ../data_base/ into data/
+ *   3. Copy the example scripts from ../example/innovus/ into data/example/innovus/
+ *   4. Build the single-file help and simulation databases
+ *
+ * data/ is gitignored, so a fresh clone has nothing in it. Without step 2 the
+ * packaged VSIX would ship an empty command database and neither hovers nor
+ * completion would find anything.
+ *
+ * Every source directory is optional: when ../data_base/ is missing (for example
+ * in a standalone checkout of just the extension) the copy is skipped with a
+ * warning and whatever is already in data/ is packaged as-is.
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -10,16 +22,53 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT = path.join(__dirname, '..');
+const REPO = path.join(ROOT, '..');
 
 function ensureDir(dirPath) {
     if (!fs.existsSync(dirPath)) {
         fs.mkdirSync(dirPath, { recursive: true });
-        console.log(`  📁 创建目录: ${path.relative(ROOT, dirPath)}`);
+        console.log(`  📁 Created directory: ${path.relative(ROOT, dirPath)}`);
+    }
+}
+
+/**
+ * Copy the files of srcDir into destDir, skipping anything already up to date.
+ * @param filter predicate on the file name; defaults to "every file"
+ * @returns the number of files copied, or -1 when srcDir does not exist
+ */
+function syncDir(srcDir, destDir, filter = () => true) {
+    if (!fs.existsSync(srcDir)) { return -1; }
+    ensureDir(destDir);
+
+    let copied = 0;
+    for (const name of fs.readdirSync(srcDir)) {
+        if (!filter(name)) { continue; }
+        const src = path.join(srcDir, name);
+        if (!fs.statSync(src).isFile()) { continue; }
+
+        const dest = path.join(destDir, name);
+        if (fs.existsSync(dest) &&
+            fs.statSync(dest).mtimeMs >= fs.statSync(src).mtimeMs) {
+            continue;   // already current
+        }
+        fs.copyFileSync(src, dest);
+        copied++;
+    }
+    return copied;
+}
+
+function report(label, srcDir, copied) {
+    if (copied < 0) {
+        console.log(`  ⚠ ${label}: source not found, skipped (${path.relative(REPO, srcDir)})`);
+    } else if (copied === 0) {
+        console.log(`  ✅ ${label}: already up to date`);
+    } else {
+        console.log(`  ✅ ${label}: ${copied} files copied`);
     }
 }
 
 function main() {
-    console.log('📦 检查 data/ 目录结构 ...');
+    console.log('📦 Checking the data/ directory structure ...');
 
     ensureDir(path.join(ROOT, 'data', 'cmds', 'innovus', '25.1', 'cn', 'help'));
     ensureDir(path.join(ROOT, 'data', 'cmds', 'innovus', '25.1', 'en', 'help'));
@@ -33,22 +82,38 @@ function main() {
     ensureDir(path.join(ROOT, 'data', 'simulations', 'cn'));
     ensureDir(path.join(ROOT, 'data', 'simulations', 'en'));
 
-    console.log('✅ data/ 目录结构就绪\n');
+    console.log('✅ data/ directory structure ready\n');
 
-    // 构建 help 数据库
-    console.log('📦 构建 Help 数据库 ...');
+    // Copy the command documentation out of data_base/
+    console.log('📦 Copying the command documentation from data_base/ ...');
+    const isJson = (name) => name.endsWith('.json');
+    for (const lang of ['cn', 'en']) {
+        const srcDir = path.join(REPO, 'data_base', lang, 'help');
+        const destDir = path.join(ROOT, 'data', 'cmds', 'innovus', '25.1', lang, 'help');
+        report(lang, srcDir, syncDir(srcDir, destDir, isJson));
+    }
+
+    // Copy the example scripts
+    const exampleSrc = path.join(REPO, 'example', 'innovus');
+    const exampleDest = path.join(ROOT, 'data', 'example', 'innovus');
+    report('examples', exampleSrc, syncDir(exampleSrc, exampleDest,
+        (name) => name.endsWith('.tcl') || name.endsWith('.f')));
+    console.log('');
+
+    // Build the help database
+    console.log('📦 Building the help database ...');
     try {
         execSync('node scripts/build-help-db.mjs', { cwd: ROOT, stdio: 'inherit' });
     } catch (e) {
-        console.log('  ⚠ Help 数据库构建失败:', e.message);
+        console.log('  ⚠ Help database build failed:', e.message);
     }
 
-    // 构建仿真数据库
-    console.log('📦 构建仿真数据库 ...');
+    // Build the simulation database
+    console.log('📦 Building the simulation database ...');
     try {
         execSync('node scripts/build-sim-db.mjs', { cwd: ROOT, stdio: 'inherit' });
     } catch (e) {
-        console.log('  ⚠ 仿真数据库构建失败:', e.message);
+        console.log('  ⚠ Simulation database build failed:', e.message);
     }
 }
 

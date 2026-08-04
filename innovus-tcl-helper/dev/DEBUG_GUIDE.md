@@ -1,15 +1,15 @@
-# 调试指南与调试数据
+# Debugging guide and debug data
 
-## 调试环境准备
+## Preparing the debug environment
 
-### 1. 确认项目结构完整
+### 1. Check that the project is complete
 
 
 ```bash
 cd innovus-tcl-helper
 ls -la
 
-# 必须存在:
+# The following must exist:
 #   package.json
 #   tsconfig.json
 #   src/extension.ts
@@ -17,18 +17,18 @@ ls -la
 #   src/hover.ts
 #   src/completion.ts
 #   src/diagnostics.ts
-#   out/  (编译后)
-#   ../data_base/help/deepseek-chat/  (数据目录)
+#   out/  (after compiling)
+#   ../data_base/help/deepseek-chat/  (the data directory)
 ```
 
-### 2. 确认编译通过
+### 2. Check that it compiles
 
 ```bash
 npm run compile
-# 无错误输出即表示成功
+# No output means success
 ```
 
-### 3. 确认数据可加载
+### 3. Check that the data loads
 
 ```bash
 node -e "
@@ -36,26 +36,26 @@ const path = require('path');
 const fs = require('fs');
 const dir = path.join(__dirname, '..', 'data_base', 'help', 'deepseek-chat');
 const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
-console.log('数据文件数:', files.length);
+console.log('Data files:', files.length);
 const first = JSON.parse(fs.readFileSync(path.join(dir, files[0]), 'utf-8'));
-console.log('示例命令:', first.command);
-console.log('摘要:', first.summary);
+console.log('Example command:', first.command);
+console.log('Summary:', first.summary);
 "
 ```
 
-预期输出：
+Expected output:
 
 ```
-数据文件数: 2175
-示例命令: Puts
-摘要: 打印指定变量或命令的帮助信息
+Data files: 2175
+Example command: Puts
+Summary: Prints the help information of a variable or command
 ```
 
-## 调试配置
+## Debug configuration
 
 ### VS Code launch.json
 
-创建 `.vscode/launch.json`（此目录和文件不发布）：
+Create `.vscode/launch.json` (neither the directory nor the file is published):
 
 ```json
 {
@@ -118,72 +118,73 @@ console.log('摘要:', first.summary);
 }
 ```
 
-## 调试步骤
+## Debugging steps
 
-### Step 1: 设置断点
+### Step 1: set breakpoints
 
-在以下关键位置设置断点：
+Useful places to break:
 
-| 文件               | 行                           | 说明         |
-| ------------------ | ---------------------------- | ------------ |
-| `extension.ts`   | `activate()` 函数          | 插件激活入口 |
-| `commands.ts`    | `load()` 方法              | 命令数据加载 |
-| `hover.ts`       | `provideHover()`           | 悬停触发     |
-| `completion.ts`  | `provideCompletionItems()` | 补全触发     |
-| `diagnostics.ts` | `updateDiagnostics()`      | 诊断触发     |
+| File | Location | Why |
+| ---- | -------- | --- |
+| `extension.ts` | the `activate()` function | The activation entry point |
+| `commands.ts` | the `load()` method | Command data loading |
+| `hover.ts` | `provideHover()` | Hover trigger |
+| `completion.ts` | `provideCompletionItems()` | Completion trigger |
+| `diagnostics.ts` | `updateDiagnostics()` | Diagnostics trigger |
 
-### Step 2: 启动调试
+### Step 2: start debugging
 
-按 `F5` → 选择 "Run Extension"
+Press `F5` → pick "Run Extension"
 
-### Step 3: 测试各项功能
+### Step 3: exercise the features
 
-在 Extension Development Host 窗口中：
+In the Extension Development Host window:
 
-1. 打开 `test/example.tcl`（或创建新的 .tcl 文件）
-2. 输入 `addInst` → **验证补全**：应弹出命令名列表
-3. 输入 `addInst -` → **验证参数补全**：应显示 `-cell`, `-inst` 等
-4. 鼠标悬浮在 `addInst` 上 → **验证悬停**：应显示中文帮助
-5. 输入 `set x [expr {1 + 2]]` → **验证诊断**：保存文件后应报 "多余的右方括号"
-6. 输入 `addInst`（不加必需参数） → **验证参数警告**：应提示缺少 `-cell` 和 `-inst`
+1. Open `test/example.tcl` (or create a new .tcl file)
+2. Type `addInst` → **check completion**: the command list should appear
+3. Type `addInst -` → **check option completion**: `-cell`, `-inst` and friends should appear
+4. Hover over `addInst` → **check the hover**: the documentation should appear
+5. Type `set x [expr {1 + 2]]` → **check the diagnostics**: saving should report the extra `]`
+6. Type `addInst` with no required arguments → **check the warning**: it should flag the
+   missing `-cell` and `-inst`
 
-### Step 4: 查看日志
+### Step 4: read the logs
 
-在 Extension Development Host 中：
+In the Extension Development Host:
 
-- `Help → Toggle Developer Tools` → Console 标签页
-- 查找 `[Innovus TCL]` 前缀的日志
+- `Help → Toggle Developer Tools` → the Console tab
+- Look for the `[Innovus TCL]` prefix
 
-## 调试数据
+## Debug data
 
-### test/example.tcl — 功能验证
+### test/example.tcl — feature verification
 
 ```tcl
-# === 命令补全测试 ===
-# 输入 "add" 时应在补全列表中看到 addInst, addNet 等
+# === Command completion ===
+# Typing "add" should offer addInst, addNet and so on
 
-# === 悬停提示测试 ===
-# 鼠标悬浮在以下命令上验证：
+# === Hover tooltips ===
+# Hover over the commands below to verify:
 addInst -cell AND2X1 -inst my_and1 -loc {100 200} -ori R0 -place_status placed
 addNet -net my_net -pins {my_and1/A my_or1/Y}
 
-# === 参数补全测试 ===
-# 在以下命令行末输入 " -" 验证参数提示：
+# === Option completion ===
+# Type " -" at the end of the line below to verify the option hints:
 checkDesign -all
 
-# === 诊断测试 ===
-# 以下行保存后应有错误/警告：
+# === Diagnostics ===
+# The lines below should produce an error or a warning on save:
 
-# 括号错误：
+# Bracket error:
 set x [expr {1 + 2]]
 
-# 引号错误：
+# Quote error:
 puts "hello world
 
-# 缺少必需参数（addInst 需要 -cell 和 -inst）：
+# Missing required arguments (addInst needs -cell and -inst):
 # addInst
 
-# === 正常用法（不应报错） ===
+# === Valid usage (must not be flagged) ===
 report_timing -delay_type max -nworst 10
 setPlaceMode -congEffort high
 routeDesign -globalDetail
@@ -191,42 +192,42 @@ verify_drc
 saveDesign my_design.enc
 ```
 
-### 功能验证清单
+### Verification checklist
 
-| 测试项               | 预期行为               | 通过 |
-| -------------------- | ---------------------- | ---- |
-| 打开 .tcl 文件       | 插件自动激活           | ☐   |
-| 输入命令名前缀       | 弹出补全列表           | ☐   |
-| 选择补全项           | 插入命令名             | ☐   |
-| 命令后输入 -         | 弹出参数补全           | ☐   |
-| 已用 flag 不再提示   | 二次输入时不显示       | ☐   |
-| 鼠标悬浮命令名       | 显示中文 Markdown 文档 | ☐   |
-| 保存含语法错误的文件 | 显示红色波浪线         | ☐   |
-| 保存含参数警告的文件 | 显示黄色波浪线         | ☐   |
-| 执行重载命令         | 提示 "已重新加载"      | ☐   |
-| 执行信息命令         | 显示 Modal 面板        | ☐   |
-| 关闭 .tcl 文件       | 插件不报错             | ☐   |
+| Test | Expected | Pass |
+| ---- | -------- | ---- |
+| Open a .tcl file | The extension activates | ☐ |
+| Type a command prefix | The completion list appears | ☐ |
+| Accept a completion | The command name is inserted | ☐ |
+| Type - after a command | The option completion appears | ☐ |
+| A used flag is not re-offered | It is hidden on the second attempt | ☐ |
+| Hover a command name | The Markdown documentation appears | ☐ |
+| Save a file with a syntax error | A red squiggle appears | ☐ |
+| Save a file with an argument warning | A yellow squiggle appears | ☐ |
+| Run the reload command | It reports "reloaded" | ☐ |
+| Run the info command | The modal panel appears | ☐ |
+| Close the .tcl file | The extension does not error | ☐ |
 
-## 常见调试问题
+## Common problems
 
-### Q: 补全列表为空
+### Q: the completion list is empty
 
-- 检查数据目录 `../data_base/help/deepseek-chat/` 是否存在
-- 查看 Developer Tools Console 是否有加载错误
+- Check that the data directory `../data_base/help/deepseek-chat/` exists
+- Look for load errors in the Developer Tools console
 
-### Q: 悬停不显示
+### Q: no hover appears
 
-- 确认 `innovus-tcl.enableHover` 为 `true`
-- 确认单词完全匹配 JSON 中的 `command` 字段（大小写敏感）
+- Confirm that `innovus-tcl.enableHover` is `true`
+- Confirm that the word exactly matches the `command` field in the JSON (it is case sensitive)
 
-### Q: 诊断不触发
+### Q: the diagnostics never fire
 
-- 诊断仅在**保存文件时**触发（`onDidSaveTextDocument`）
-- 切换编辑器时也会触发
-- 确认 `innovus-tcl.enableDiagnostics` 为 `true`
+- Diagnostics only run **on save** (`onDidSaveTextDocument`)
+- They also run when the active editor changes
+- Confirm that `innovus-tcl.enableDiagnostics` is `true`
 
-### Q: 修改源码后不生效
+### Q: source changes have no effect
 
-- 重新编译：`npm run compile`
-- 重新启动调试：`Ctrl+Shift+F5`（Restart Debugging）
-- 或使用 watch 模式：`npm run watch`
+- Recompile: `npm run compile`
+- Restart the debug session: `Ctrl+Shift+F5` (Restart Debugging)
+- Or use watch mode: `npm run watch`

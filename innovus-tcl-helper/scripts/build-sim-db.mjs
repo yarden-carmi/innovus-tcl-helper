@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * 仿真数据库构建 — 将 data/simulations/<lang>/*.tcl 合并为单个 .db.tcl
- * 使用 head 版本构建
+ * Simulation database builder — merges data/simulations/<lang>/*.tcl into a single .db.tcl
+ * Built from the head version
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -37,5 +37,5 @@ for (const lang of LANGS) {
     fs.writeFileSync(dbFile, lines.join('\n'), 'utf-8');
     const srcKB = (files.reduce((s, f) => s + fs.statSync(path.join(srcDir, f)).size, 0) / 1024).toFixed(0);
     const dbKB = (fs.statSync(dbFile).size / 1024).toFixed(0);
-    console.log(`  ✅ ${lang}: ${files.length} 文件, ${srcKB}KB → ${dbKB}KB`);
+    console.log(`  ✅ ${lang}: ${files.length} files, ${srcKB}KB → ${dbKB}KB`);
 }

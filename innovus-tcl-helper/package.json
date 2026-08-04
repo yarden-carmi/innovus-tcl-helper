@@ -1,7 +1,7 @@
 {
     "name": "innovus-tcl-enhance",
     "displayName": "Innovus TCL Enhance",
-    "description": "TCL 语言支持，集成 Cadence Innovus EDA 工具命令的智能提示、悬停文档、跨文件编译分析、静态检查与 Copilot AI 集成",
+    "description": "%extension.description%",
     "version": "0.6.4",
     "publisher": "fd-echoro",
     "icon": "icon.png",
@@ -32,72 +32,72 @@
         "commands": [
             {
                 "command": "innovus-tcl.reloadDB",
-                "title": "Innovus TCL: 重新加载命令数据库"
+                "title": "%command.reloadDB.title%"
             },
             {
                 "command": "innovus-tcl.showHelp",
-                "title": "Innovus TCL: 显示插件信息"
+                "title": "%command.showHelp.title%"
             },
             {
                 "command": "innovus-tcl.switchLanguage",
-                "title": "Innovus TCL: 切换中/英文"
+                "title": "%command.switchLanguage.title%"
             },
             {
                 "command": "innovus-tcl.toggleHelpStyle",
-                "title": "Innovus TCL: 切换帮助显示风格 (Webview/纯文本)"
+                "title": "%command.toggleHelpStyle.title%"
             },
             {
                 "command": "innovus-tcl.analyzeScript",
-                "title": "Innovus TCL: AI 分析当前 TCL 脚本"
+                "title": "%command.analyzeScript.title%"
             },
             {
                 "command": "innovus-tcl.listCommands",
-                "title": "Innovus TCL: 列出所有 Innovus 命令"
+                "title": "%command.listCommands.title%"
             },
             {
                 "command": "innovus-tcl.switchVersion",
-                "title": "Innovus TCL: 切换 Innovus 版本"
+                "title": "%command.switchVersion.title%"
             },
             {
                 "command": "innovus-tcl.installMcp",
-                "title": "Innovus TCL: 🤖 一键安装 Copilot MCP 工具"
+                "title": "%command.installMcp.title%"
             },
             {
                 "command": "innovus-tcl.installSkills",
-                "title": "Innovus TCL: 🎯 安装 Agent Skills"
+                "title": "%command.installSkills.title%"
             },
             {
                 "command": "innovus-tcl.editPrompt",
-                "title": "Innovus TCL: ✏️ 编辑 AI 分析提示词"
+                "title": "%command.editPrompt.title%"
             },
             {
                 "command": "innovus-tcl.openExample",
-                "title": "Innovus TCL: 📂 打开示例 TCL 脚本"
+                "title": "%command.openExample.title%"
             },
             {
                 "command": "innovus-tcl.runLint",
-                "title": "Innovus TCL: 🔍 运行跨文件 Lint"
+                "title": "%command.runLint.title%"
             },
             {
                 "command": "innovus-tcl.showLintReport",
-                "title": "Innovus TCL: 📊 显示 Lint 报告"
+                "title": "%command.showLintReport.title%"
             },
             {
                 "command": "innovus-tcl.openFFile",
-                "title": "Innovus TCL: 📄 打开 .f 编译文件"
+                "title": "%command.openFFile.title%"
             },
             {
                 "command": "innovus-tcl.setFFile",
-                "title": "Innovus TCL: 📝 设置 .f 编译文件路径"
+                "title": "%command.setFFile.title%"
             },
             {
                 "command": "innovus-tcl.runScript",
-                "title": "运行当前 TCL 脚本",
+                "title": "%command.runScript.title%",
                 "icon": "$(play)"
             },
             {
                 "command": "innovus-tcl.runProject",
-                "title": "运行 .f 项目",
+                "title": "%command.runProject.title%",
                 "icon": "$(run-all)"
             }
         ],
@@ -106,58 +106,58 @@
             "properties": {
                 "innovus-tcl.language": {
                     "type": "string",
-                    "default": "auto",
+                    "default": "en",
                     "enum": [
-                        "auto",
+                        "en",
                         "zh",
-                        "en"
+                        "auto"
                     ],
                     "enumDescriptions": [
-                        "跟随 VS Code 界面语言自动选择",
-                        "中文 (DeepSeek 结构化翻译)",
-                        "English (原生 help 输出解析)"
+                        "%config.language.enum0%",
+                        "%config.language.enum1%",
+                        "%config.language.enum2%"
                     ],
-                    "description": "命令文档的显示语言。设为 auto 则自动跟随 VS Code 显示语言"
+                    "description": "%config.language.description%"
                 },
                 "innovus-tcl.version": {
                     "type": "string",
                     "default": "25.1",
-                    "description": "工具/版本标识。内置: 25.1 (Innovus) 和 test (空数据)。可在 data/innovus/ 下添加自定义工具目录（如 dc）。"
+                    "description": "%config.version.description%"
                 },
                 "innovus-tcl.versions": {
                     "type": "array",
                     "default": [],
-                    "description": "[已废弃] 版本列表由 data/innovus/ 目录自动扫描。"
+                    "description": "%config.versions.description%"
                 },
                 "innovus-tcl.enableAITools": {
                     "type": "boolean",
                     "default": true,
-                    "description": "启用 Copilot AI 工具集成（允许 Copilot 查询 Innovus 命令数据库和解析 TCL 脚本）"
+                    "description": "%config.enableAITools.description%"
                 },
                 "innovus-tcl.enableDiagnostics": {
                     "type": "boolean",
                     "default": true,
-                    "description": "启用 TCL 语法静态检查（括号/引号匹配、命令参数校验、相似命令建议）"
+                    "description": "%config.enableDiagnostics.description%"
                 },
                 "innovus-tcl.enableCompilation": {
                     "type": "boolean",
                     "default": true,
-                    "description": "启用跨文件 TCL 编译分析（通过 .f 文件读取所有脚本，追踪变量定义与引用）"
+                    "description": "%config.enableCompilation.description%"
                 },
                 "innovus-tcl.fFile": {
                     "type": "string",
                     "default": "tcl.f",
-                    "description": ".f 文件路径（相对于工作区根目录），用于指定 TCL 脚本的编译列表和顺序。每行一个 .tcl 文件相对路径，按顺序从上到下编译。"
+                    "description": "%config.fFile.description%"
                 },
                 "innovus-tcl.enableHover": {
                     "type": "boolean",
                     "default": true,
-                    "description": "启用命令悬停提示"
+                    "description": "%config.enableHover.description%"
                 },
                 "innovus-tcl.enableCompletion": {
                     "type": "boolean",
                     "default": true,
-                    "description": "启用命令自动补全"
+                    "description": "%config.enableCompletion.description%"
                 },
                 "innovus-tcl.helpStyle": {
                     "type": "string",
@@ -167,10 +167,10 @@
                         "plain"
                     ],
                     "enumDescriptions": [
-                        "Webview 富文本面板（教育化排版、参数分析、示例提示）",
-                        "纯文本编辑器标签（类 man page 风格）"
+                        "%config.helpStyle.enum0%",
+                        "%config.helpStyle.enum1%"
                     ],
-                    "description": "F12/Ctrl+Click 帮助文档的显示风格"
+                    "description": "%config.helpStyle.description%"
                 },
                 "innovus-tcl.diagnosticLevel": {
                     "type": "string",
@@ -181,31 +181,31 @@
                         "strict"
                     ],
                     "enumDescriptions": [
-                        "仅括号和引号匹配",
-                        "基础检查 + 命令参数校验",
-                        "全部检查 + 类型验证 + 相似命令建议"
+                        "%config.diagnosticLevel.enum0%",
+                        "%config.diagnosticLevel.enum1%",
+                        "%config.diagnosticLevel.enum2%"
                     ],
-                    "description": "静态检查的严格级别"
+                    "description": "%config.diagnosticLevel.description%"
                 },
                 "innovus-tcl.aiPrompt": {
                     "type": "string",
                     "default": "",
-                    "description": "自定义 AI 分析提示词。留空使用内置默认提示词。"
+                    "description": "%config.aiPrompt.description%"
                 },
                 "innovus-tcl.tclshPath": {
                     "type": "string",
                     "default": "",
-                    "description": "自定义 tclsh 解释器路径（绝对路径）。留空自动搜索：内置（macOS arm64）> 系统 PATH。Linux/Windows 用户需安装系统 tclsh 或手动指定此路径。"
+                    "description": "%config.tclshPath.description%"
                 },
                 "innovus-tcl.runSaveOutput": {
                     "type": "boolean",
                     "default": false,
-                    "description": "运行 TCL 脚本后将输出保存到文件。"
+                    "description": "%config.runSaveOutput.description%"
                 },
                 "innovus-tcl.runOutputDir": {
                     "type": "string",
                     "default": "",
-                    "description": "运行输出文件保存目录。留空使用工作区 .innovus-run/ 目录。"
+                    "description": "%config.runOutputDir.description%"
                 },
                 "innovus-tcl.simOutputMode": {
                     "type": "string",
@@ -215,10 +215,10 @@
                         "mkdir"
                     ],
                     "enumDescriptions": [
-                        "仅模拟，不创建任何文件或目录",
-                        "自动创建输出目录（mkdir -p），生成空输出文件"
+                        "%config.simOutputMode.enum0%",
+                        "%config.simOutputMode.enum1%"
                     ],
-                    "description": "仿真输出文件处理模式：dry-run 仅模拟，mkdir 自动创建目录和空文件。"
+                    "description": "%config.simOutputMode.description%"
                 }
             }
         },
@@ -244,7 +244,7 @@
         "prepublish": "node scripts/prepublish.mjs",
         "package": "node scripts/prepublish.mjs && npm run compile && mkdir -p publish && vsce package --allow-missing-repository --out publish/",
         "publish": "node scripts/prepublish.mjs && npm run compile && vsce publish --allow-missing-repository",
-        "publish:check": "echo 'VSCE_PAT 状态:' && [ -n \"$VSCE_PAT\" ] && echo '✅ 已设置' || echo '❌ 未设置 - 需要: export VSCE_PAT=<your-pat>'",
+        "publish:check": "echo 'VSCE_PAT status:' && [ -n \"$VSCE_PAT\" ] && echo '✅ set' || echo '❌ not set - required: export VSCE_PAT=<your-pat>'",
         "lint": "eslint src --ext ts"
     },
     "devDependencies": {

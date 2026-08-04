@@ -28,15 +28,15 @@
         {
             "type": "npm",
             "script": "package",
-            "label": "📦 npm: package (生成 VSIX 到 publish/)",
+            "label": "📦 npm: package (build the VSIX into publish/)",
             "problemMatcher": []
         },
         {
             "type": "npm",
             "script": "publish",
-            "label": "🚀 npm: publish (发布到 VS Code 商店)",
+            "label": "🚀 npm: publish (publish to the VS Code Marketplace)",
             "problemMatcher": [],
-            "detail": "需要先设置 VSCE_PAT 环境变量"
+            "detail": "Requires the VSCE_PAT environment variable to be set"
         }
     ]
 }

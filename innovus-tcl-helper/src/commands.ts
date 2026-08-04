@@ -1,31 +1,32 @@
 /**
- * Innovus 命令数据库 - 轻量级命令信息加载与查询
+ * Innovus command database - lightweight loading and lookup of command information
  *
- * 数据目录结构:
+ * Data directory layout:
  *   data/cmds/innovus/
- *   ├── 25.1/                    ← 默认版本 (Innovus 25.1)
- *   │   ├── cn/help/*.json       ← 中文命令文档
- *   │   └── en/help/*.json       ← 英文命令文档
- *   ├── test/                    ← 测试版本 (空数据/关闭高亮)
- *   │   ├── cn/help/             ← 空目录
- *   │   └── en/help/             ← 空目录
- *   └── {custom}/                ← 自定义工具 (如 dc)
+ *   ├── 25.1/                    ← default version (Innovus 25.1)
+ *   │   ├── cn/help/*.json       ← Chinese command documentation
+ *   │   └── en/help/*.json       ← English command documentation
+ *   ├── test/                    ← test version (empty data / highlighting off)
+ *   │   ├── cn/help/             ← empty directory
+ *   │   └── en/help/             ← empty directory
+ *   └── {custom}/                ← custom tool (e.g. dc)
  *       ├── cn/help/*.json
  *       └── en/help/*.json
  *
- * 版本选择:
- *   默认/25.1 → data/cmds/innovus/25.1/{lang}/help/
- *   test      → data/cmds/innovus/test/{lang}/help/
- *   其他      → data/cmds/innovus/{version}/{lang}/help/
+ * Version selection:
+ *   default/25.1 → data/cmds/innovus/25.1/{lang}/help/
+ *   test         → data/cmds/innovus/test/{lang}/help/
+ *   other        → data/cmds/innovus/{version}/{lang}/help/
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { t } from './i18n';
 
-/** 支持的语言 */
+/** Supported documentation languages */
 export type Language = 'zh' | 'en';
 
-/** 命令选项/参数 */
+/** Command option/argument */
 export interface CmdOption {
     name: string;
     description: string;
@@ -33,7 +34,7 @@ export interface CmdOption {
     type: string;          // "string" | "flag" | "enum" | "point" | "int" | "float"
 }
 
-/** 命令信息 */
+/** Command information */
 export interface CmdInfo {
     command: string;
     is_cmd: boolean;
@@ -43,20 +44,20 @@ export interface CmdInfo {
     options: CmdOption[];
 }
 
-/** 命令数据库 */
+/** Command database */
 class CommandDB {
     private commands: Map<string, CmdInfo> = new Map();
     private loaded: boolean = false;
-    private dataRoot: string;        // data/cmds/innovus/ 目录
-    private language: Language = 'zh';
-    private version: string = '';    // 版本标识，如 "25.1", "test", "dc"
+    private dataRoot: string;        // the data/cmds/innovus/ directory
+    private language: Language = 'en';
+    private version: string = '';    // version identifier, e.g. "25.1", "test", "dc"
 
     constructor(extensionPath: string) {
-        // 始终使用扩展内置的 data/cmds/innovus/ 目录
+        // Always use the data/cmds/innovus/ directory bundled with the extension
         this.dataRoot = path.join(extensionPath, 'data', 'cmds', 'innovus');
     }
 
-    /** 设置语言 */
+    /** Set the documentation language */
     setLanguage(lang: Language): void {
         if (this.language !== lang) {
             this.language = lang;
@@ -64,10 +65,10 @@ class CommandDB {
         }
     }
 
-    /** 获取当前语言 */
+    /** Get the current documentation language */
     getLanguage(): Language { return this.language; }
 
-    /** 设置版本 */
+    /** Set the version */
     setVersion(ver: string): void {
         if (this.version !== ver) {
             this.version = ver;
@@ -75,10 +76,10 @@ class CommandDB {
         }
     }
 
-    /** 获取当前版本 */
+    /** Get the current version */
     getVersion(): string { return this.version; }
 
-    /** 扫描 data/innovus/ 下所有可用版本 */
+    /** Scan data/innovus/ for all available versions */
     getAvailableVersions(): { label: string; description: string }[] {
         if (!fs.existsSync(this.dataRoot)) { return []; }
 
@@ -88,23 +89,23 @@ class CommandDB {
             for (const entry of entries) {
                 if (!entry.isDirectory()) { continue; }
                 const verName = entry.name;
-                // 检查该版本是否有数据目录
+                // Check whether this version has a data directory
                 const cnHelp = path.join(this.dataRoot, verName, 'cn', 'help');
                 const enHelp = path.join(this.dataRoot, verName, 'en', 'help');
                 if (fs.existsSync(cnHelp) || fs.existsSync(enHelp)) {
                     const fileCount = this.countFiles(cnHelp) + this.countFiles(enHelp);
                     if (verName === '25.1') {
-                        versions.push({ label: '25.1', description: `Innovus 25.1 — ${fileCount} 个文件` });
+                        versions.push({ label: '25.1', description: t('version.innovus', fileCount) });
                     } else if (verName === 'test') {
-                        versions.push({ label: 'test', description: '测试模式 — 空数据 (关闭 Innovus 高亮/提示)' });
+                        versions.push({ label: 'test', description: t('version.test') });
                     } else {
-                        versions.push({ label: verName, description: `自定义: ${verName} — ${fileCount} 个文件` });
+                        versions.push({ label: verName, description: t('version.custom', verName, fileCount) });
                     }
                 }
             }
         } catch { /* ignore */ }
 
-        // 确保 25.1 排第一
+        // Make sure 25.1 comes first
         return versions.sort((a, b) => {
             if (a.label === '25.1') { return -1; }
             if (b.label === '25.1') { return 1; }
@@ -119,7 +120,7 @@ class CommandDB {
         } catch { return 0; }
     }
 
-    /** 获取数据库统计信息 */
+    /** Get the database statistics */
     getStats(): { totalEntries: number; commands: number; variables: number; version: string; language: string } {
         this.load();
         let cmdCount = 0;
@@ -137,8 +138,8 @@ class CommandDB {
         };
     }
 
-    /** 获取数据文件所在目录
-     *  结构: data/cmds/innovus/{version}/{langDir}/help/
+    /** Get the directory holding the data files.
+     *  Layout: data/cmds/innovus/{version}/{langDir}/help/
      *  langDir: zh → cn, en → en
      */
     private getDataSourceDir(): string {
@@ -147,7 +148,7 @@ class CommandDB {
         return path.join(this.dataRoot, ver, langDir, 'help');
     }
 
-    /** 加载命令数据 — 优先读 .db.json 单文件 */
+    /** Load the command data — prefers the single-file .db.json */
     load(): void {
         if (this.loaded) { return; }
 
@@ -156,7 +157,7 @@ class CommandDB {
             const parentDir = path.dirname(dataDir);
             const dbFile = path.join(parentDir, 'help.db.json');
 
-            // 1. 尝试单文件 DB
+            // 1. Try the single-file DB
             if (fs.existsSync(dbFile)) {
                 const db = JSON.parse(fs.readFileSync(dbFile, 'utf-8'));
                 const cmds = db.commands || {};
@@ -164,13 +165,13 @@ class CommandDB {
                     this.commands.set(name, info as CmdInfo);
                 }
                 this.loaded = true;
-                console.log(`[Innovus TCL] 已加载 ${this.commands.size} 个命令 (版本: ${this.version || '25.1'}, 语言: ${this.language}, DB模式)`);
+                console.log(`[Innovus TCL] Loaded ${this.commands.size} commands (version: ${this.version || '25.1'}, language: ${this.language}, DB mode)`);
                 return;
             }
 
-            // 2. 回退到独立 .json 文件
+            // 2. Fall back to the individual .json files
             if (!fs.existsSync(dataDir)) {
-                console.warn(`[Innovus TCL] 数据目录不存在: ${dataDir}`);
+                console.warn(`[Innovus TCL] Data directory not found: ${dataDir}`);
                 this.loaded = true;
                 return;
             }
@@ -185,37 +186,37 @@ class CommandDB {
                         this.commands.set(info.command, info);
                     }
                 } catch {
-                    // 跳过解析失败的文件
+                    // Skip files that fail to parse
                 }
             }
             this.loaded = true;
-            console.log(`[Innovus TCL] 已加载 ${this.commands.size} 个命令 (版本: ${this.version || '25.1'}, 语言: ${this.language})`);
+            console.log(`[Innovus TCL] Loaded ${this.commands.size} commands (version: ${this.version || '25.1'}, language: ${this.language})`);
         } catch (err) {
-            console.error(`[Innovus TCL] 加载命令数据失败: ${err}`);
+            console.error(`[Innovus TCL] Failed to load command data: ${err}`);
             this.loaded = true;
         }
     }
 
-    /** 重新加载 */
+    /** Reload */
     reload(): void {
         this.commands.clear();
         this.loaded = false;
         this.load();
     }
 
-    /** 获取命令信息 */
+    /** Get the information for a command */
     get(name: string): CmdInfo | undefined {
         this.load();
         return this.commands.get(name);
     }
 
-    /** 获取所有命令名 */
+    /** Get every command name */
     getCommandNames(): string[] {
         this.load();
         return Array.from(this.commands.keys());
     }
 
-    /** 模糊搜索命令 */
+    /** Fuzzy search for commands */
     search(prefix: string, limit: number = 50): CmdInfo[] {
         this.load();
         const results: CmdInfo[] = [];
@@ -229,28 +230,28 @@ class CommandDB {
         return results;
     }
 
-    /** 检查是否为已知命令 */
+    /** Check whether this is a known command */
     isCommand(name: string): boolean {
         this.load();
         const info = this.commands.get(name);
         return info !== undefined && info.is_cmd === true;
     }
 
-    /** 检查是否为模式/变量设置项（非命令） */
+    /** Check whether this is a mode/variable setting (not a command) */
     isModeVariable(name: string): boolean {
         this.load();
         const info = this.commands.get(name);
         return info !== undefined && info.is_cmd === false;
     }
 
-    /** 检查是否为已知条目（命令或变量） */
+    /** Check whether this is a known entry (command or variable) */
     isKnown(name: string): boolean {
         this.load();
         return this.commands.has(name);
     }
 }
 
-/** 全局单例 */
+/** Global singleton */
 let dbInstance: CommandDB | null = null;
 
 export function getDB(extensionPath?: string): CommandDB {

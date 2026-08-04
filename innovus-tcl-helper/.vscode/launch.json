@@ -2,7 +2,7 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "🚀 启动调试 (Extension Dev Host)",
+            "name": "🚀 Launch Debug (Extension Dev Host)",
             "type": "extensionHost",
             "request": "launch",
             "args": [
@@ -14,7 +14,7 @@
             "preLaunchTask": "npm: compile"
         },
         {
-            "name": "🧪 启动调试 (不编译，快速重开)",
+            "name": "🧪 Launch Debug (no compile, fast restart)",
             "type": "extensionHost",
             "request": "launch",
             "args": [

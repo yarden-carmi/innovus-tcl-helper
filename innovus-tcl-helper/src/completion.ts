@@ -1,20 +1,10 @@
 /**
- * Completion Provider - 输入时自动补全 Innovus 命令名及其参数
+ * Completion Provider - auto-completes Innovus command names and their options while typing
  */
 
 import * as vscode from 'vscode';
 import { getDB, CmdInfo } from './commands';
-
-/** 解析当前语言设置 */
-function resolveCompletionLanguage(): 'zh' | 'en' {
-    const configLang = vscode.workspace.getConfiguration('innovus-tcl')
-        .get<string>('language', 'auto');
-    if (configLang === 'auto') {
-        const vsLang = vscode.env.language.toLowerCase();
-        return vsLang.startsWith('zh') ? 'zh' : 'en';
-    }
-    return configLang === 'zh' ? 'zh' : 'en';
-}
+import { t } from './i18n';
 
 export class InnovusCompletionProvider implements vscode.CompletionItemProvider {
 
@@ -26,57 +16,54 @@ export class InnovusCompletionProvider implements vscode.CompletionItemProvider 
     ): vscode.ProviderResult<vscode.CompletionItem[] | vscode.CompletionList> {
 
         const db = getDB();
-        const isZh = resolveCompletionLanguage() === 'zh';
         const linePrefix = document.lineAt(position).text.substring(0, position.character);
 
-        // 判断是否在输入命令名（行首或空白后，不在参数区）
+        // Are we typing a command name (start of line or after whitespace, not in the option area)?
         const isCommandPosition = this.isAtCommandStart(linePrefix);
 
         if (isCommandPosition) {
-            // --- 命令名 + 变量名补全 ---
+            // --- Command name + variable name completion ---
             const allNames = db.getCommandNames();
             const items: vscode.CompletionItem[] = [];
             for (const name of allNames) {
                 const info = db.get(name);
-                const isCmd = info?.is_cmd !== false;  // 默认为命令
+                const isCmd = info?.is_cmd !== false;  // Treated as a command by default
                 const item = new vscode.CompletionItem(
                     name,
                     isCmd ? vscode.CompletionItemKind.Function : vscode.CompletionItemKind.Variable
                 );
-                item.detail = isCmd
-                    ? (isZh ? 'Innovus 命令' : 'Innovus Command')
-                    : (isZh ? '模式/变量设置' : 'Mode/Variable Setting');
+                item.detail = isCmd ? t('completion.innovusCommand') : t('completion.modeVariable');
                 item.documentation = new vscode.MarkdownString(
-                    info ? `**${info.summary}**\n\n${info.description || ''}` : (isZh ? 'Innovus 条目' : 'Innovus entry')
+                    info ? `**${info.summary}**\n\n${info.description || ''}` : t('completion.innovusEntry')
                 );
-                // 排序：命令在前，变量在后
+                // Sort order: commands first, variables after
                 item.sortText = isCmd ? ('0' + name) : ('1' + name);
                 items.push(item);
             }
             return items;
         }
 
-        // --- 参数补全 ---
-        // 查找当前行使用的命令
+        // --- Option completion ---
+        // Find the command used on the current line
         const cmdName = this.extractCommandName(linePrefix);
         if (!cmdName) { return []; }
 
         const cmdInfo = db.get(cmdName);
         if (!cmdInfo || !cmdInfo.options) { return []; }
 
-        // 收集已使用的参数名
+        // Collect the option names already used
         const usedFlags = this.extractUsedFlags(linePrefix);
 
         const items: vscode.CompletionItem[] = [];
         for (const opt of cmdInfo.options) {
-            // 跳过已使用的 flag 类型参数
+            // Skip flag-type options that are already used
             if (opt.type === 'flag' && usedFlags.has(opt.name)) {
                 continue;
             }
 
             const item = new vscode.CompletionItem(opt.name, vscode.CompletionItemKind.Property);
 
-            // 标签：参数名 + 必需/可选标记
+            // Label: option name + required/optional marker
             item.label = opt.name;
             if (opt.required) {
                 item.label += '  🔴';
@@ -86,38 +73,34 @@ export class InnovusCompletionProvider implements vscode.CompletionItemProvider 
             item.filterText = opt.name;
             item.sortText = opt.required ? '0' + opt.name : '1' + opt.name;
 
-            // 文档说明
+            // Documentation
             const typeLabel = (() => {
                 switch (opt.type) {
-                    case 'string': return isZh ? '字符串' : 'string';
-                    case 'int': return isZh ? '整数' : 'integer';
-                    case 'float': return isZh ? '浮点数' : 'float';
-                    case 'flag': return isZh ? '开关' : 'flag';
-                    case 'enum': return isZh ? '枚举' : 'enum';
-                    case 'point': return isZh ? '坐标' : 'point';
+                    case 'string': return t('completion.typeString');
+                    case 'int': return t('completion.typeInt');
+                    case 'float': return t('completion.typeFloat');
+                    case 'flag': return t('completion.typeFlag');
+                    case 'enum': return t('completion.typeEnum');
+                    case 'point': return t('completion.typePoint');
                     default: return opt.type;
                 }
             })();
-            const reqLabel = isZh ? (opt.required ? '⚠️ 必需' : '可选') : (opt.required ? '⚠️ Required' : 'Optional');
+            const reqLabel = opt.required ? t('completion.requiredMark') : t('common.optional');
             item.documentation = new vscode.MarkdownString(
-                isZh
-                    ? `**${opt.name}**  \n\n${opt.description}  \n\n*类型: \`${opt.type}\` (${typeLabel}) | ${reqLabel}*`
-                    : `**${opt.name}**  \n\n${opt.description}  \n\n*Type: \`${opt.type}\` (${typeLabel}) | ${reqLabel}*`
+                `**${opt.name}**  \n\n${opt.description}  \n\n*${t('common.type')}: \`${opt.type}\` (${typeLabel}) | ${reqLabel}*`
             );
 
-            // 非 flag 类型：插入参数名 + 占位符
+            // Non-flag types: insert the option name plus a placeholder
             if (opt.type === 'flag') {
                 item.insertText = new vscode.SnippetString(opt.name + ' ');
             } else if (opt.type === 'enum') {
-                // 尝试从描述中提取枚举值
+                // Try to extract the enum values from the description
                 const enumMatch = opt.description.match(/\{([^}]+)\}/);
                 if (enumMatch) {
                     const enumValues = enumMatch[1].split(/[,|/]/).map(s => s.trim()).filter(Boolean);
                     item.insertText = new vscode.SnippetString(opt.name + ' ${1|' + enumValues.join(',') + '|} ');
                     item.documentation = new vscode.MarkdownString(
-                        isZh
-                            ? `**${opt.name}**  \n\n${opt.description}  \n\n*可选值: ${enumValues.join(', ')}*  \n*类型: \`enum\` | ${reqLabel}*`
-                            : `**${opt.name}**  \n\n${opt.description}  \n\n*Choices: ${enumValues.join(', ')}*  \n*Type: \`enum\` | ${reqLabel}*`
+                        `**${opt.name}**  \n\n${opt.description}  \n\n*${t('completion.choices')}: ${enumValues.join(', ')}*  \n*${t('common.type')}: \`enum\` | ${reqLabel}*`
                     );
                 } else {
                     item.insertText = new vscode.SnippetString(opt.name + ' ${1:<value>} ');
@@ -132,32 +115,33 @@ export class InnovusCompletionProvider implements vscode.CompletionItemProvider 
         return items;
     }
 
-    /** 判断光标位置是否在命令名输入位置 */
+    /** Determine whether the cursor sits where a command name is typed */
     private isAtCommandStart(line: string): boolean {
-        // 去掉行首空白后的文本
+        // Text after stripping the leading whitespace
         const trimmed = line.trimStart();
         if (trimmed.length === 0) { return true; }
-        // 如果已经有一个完整的词（命令名），且有空格后，就不是命令位置
-        // 简单判断：没有空格或者是刚空格完
+        // If a complete word (the command name) is already there followed by a space,
+        // this is no longer the command position.
+        // Simple rule: no space yet, or a space was just typed.
         const spaceIdx = trimmed.indexOf(' ');
         if (spaceIdx === -1) {
-            // 还没空格，可能正在输入命令名
-            // 如果以 - 开头，说明在输入参数
+            // No space yet, a command name may be in progress.
+            // A leading - means an option is being typed instead.
             return !trimmed.startsWith('-');
         }
-        // 已有空格，检查光标是否在参数区
+        // A space is already present, check whether the cursor is in the option area
         const afterLastSpace = line.lastIndexOf(' ');
         const textAfterSpace = line.substring(afterLastSpace + 1);
         return textAfterSpace.startsWith('-');
     }
 
-    /** 从行文本中提取命令名 */
+    /** Extract the command name from the line text */
     private extractCommandName(line: string): string | null {
         const trimmed = line.trimStart();
         const spaceIdx = trimmed.indexOf(' ');
         if (spaceIdx === -1) { return null; }
         const cmdName = trimmed.substring(0, spaceIdx);
-        // 验证是已知命令
+        // Verify it is a known command
         const db = getDB();
         if (db.isCommand(cmdName)) {
             return cmdName;
@@ -165,7 +149,7 @@ export class InnovusCompletionProvider implements vscode.CompletionItemProvider 
         return null;
     }
 
-    /** 提取行中已使用的 flag 参数 */
+    /** Extract the flag options already used on the line */
     private extractUsedFlags(line: string): Set<string> {
         const flags = new Set<string>();
         const regex = /(-\w+)/g;

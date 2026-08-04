@@ -1,32 +1,32 @@
 /**
- * TCL AST 解析器 — Tokenizer + Parser
+ * TCL AST parser — tokenizer + parser
  *
- * 解析 TCL 脚本的关键语法结构:
- *   - set varName value          → 变量赋值
- *   - $varName / ${varName}      → 变量引用
- *   - source file.tcl            → 文件包含
- *   - proc name {args} {body}    → 过程定义
- *   - [command ...]              → 命令替换（括号内嵌命令）
- *   - "string" / {literal}       → 字符串/字面量
- *   - # comment                  → 注释
+ * Parses the key syntactic structures of a TCL script:
+ *   - set varName value          → variable assignment
+ *   - $varName / ${varName}      → variable reference
+ *   - source file.tcl            → file inclusion
+ *   - proc name {args} {body}    → procedure definition
+ *   - [command ...]              → command substitution (nested command in brackets)
+ *   - "string" / {literal}       → string/literal
+ *   - # comment                  → comment
  *
- * 用于跨文件变量追踪和 Lint 分析。
+ * Used for cross-file variable tracking and lint analysis.
  */
 
 // ════════════════════════════════════════════════════════════
-//  Token 类型定义
+//  Token type definitions
 // ════════════════════════════════════════════════════════════
 
 export enum TokenType {
-    COMMAND = 'COMMAND',         // 命令名（第一个词）
-    WORD = 'WORD',               // 普通参数词
-    STRING = 'STRING',           // "双引号字符串"
-    BRACED = 'BRACED',           // {花括号字面量}
-    VARIABLE_REF = 'VAR_REF',    // $varName 或 ${varName}
-    NEWLINE = 'NEWLINE',         // 换行（语句分隔符）
-    EOF = 'EOF',                 // 文件结束
-    SEMICOLON = 'SEMICOLON',     // ; 分号（另一语句分隔符）
-    COMMENT = 'COMMENT',         // # 注释
+    COMMAND = 'COMMAND',         // command name (the first word)
+    WORD = 'WORD',               // plain argument word
+    STRING = 'STRING',           // "double-quoted string"
+    BRACED = 'BRACED',           // {braced literal}
+    VARIABLE_REF = 'VAR_REF',    // $varName or ${varName}
+    NEWLINE = 'NEWLINE',         // newline (statement separator)
+    EOF = 'EOF',                 // end of file
+    SEMICOLON = 'SEMICOLON',     // ; semicolon (the other statement separator)
+    COMMENT = 'COMMENT',         // # comment
 }
 
 export interface Token {
@@ -34,35 +34,35 @@ export interface Token {
     value: string;
     line: number;       // 1-based
     column: number;     // 1-based
-    rawLength: number;  // 原始文本长度
+    rawLength: number;  // length of the raw text
 }
 
 // ════════════════════════════════════════════════════════════
-//  AST 节点类型定义
+//  AST node type definitions
 // ════════════════════════════════════════════════════════════
 
-/** 变量赋值节点 */
+/** Variable assignment node */
 export interface SetNode {
     kind: 'set';
     varName: string;
-    valueTokens: Token[];      // 值部分的 tokens（可能包含变量引用等）
-    valueText: string;         // 原始值文本
+    valueTokens: Token[];      // tokens of the value part (may contain variable references)
+    valueText: string;         // raw value text
     line: number;
     column: number;
-    rawText: string;           // 整行原始文本
+    rawText: string;           // raw text of the whole line
 }
 
-/** 变量引用节点 */
+/** Variable reference node */
 export interface VarRefNode {
     kind: 'var_ref';
-    varName: string;           // 去掉 $ 前缀的变量名
+    varName: string;           // variable name without the $ prefix
     isBraceForm: boolean;      // ${varName} vs $varName
     line: number;
     column: number;
     rawText: string;
 }
 
-/** 文件包含节点 */
+/** File inclusion node */
 export interface SourceNode {
     kind: 'source';
     filePath: string;
@@ -71,20 +71,20 @@ export interface SourceNode {
     rawText: string;
 }
 
-/** 过程定义节点 */
+/** Procedure definition node */
 export interface ProcNode {
     kind: 'proc';
     procName: string;
-    args: string[];            // 参数名列表（仅参数名，不含默认值）
-    bodyStartLine: number;     // body 开始行
-    bodyEndLine: number;       // body 结束行
-    bodyText: string;          // body 文本内容（去外层花括号）
+    args: string[];            // argument names only (no default values)
+    bodyStartLine: number;     // first line of the body
+    bodyEndLine: number;       // last line of the body
+    bodyText: string;          // body text (without the outer braces)
     line: number;
     column: number;
     rawText: string;
 }
 
-/** 通用命令调用节点 */
+/** Generic command call node */
 export interface CommandNode {
     kind: 'command';
     commandName: string;
@@ -97,13 +97,13 @@ export interface CommandNode {
 export type AstNode = SetNode | VarRefNode | SourceNode | ProcNode | CommandNode;
 
 // ════════════════════════════════════════════════════════════
-//  解析结果
+//  Parse result
 // ════════════════════════════════════════════════════════════
 
 export interface ParseResult {
     filePath: string;
     nodes: AstNode[];
-    // 快速索引
+    // Fast lookup indexes
     sets: SetNode[];
     varRefs: VarRefNode[];
     sources: SourceNode[];
@@ -123,8 +123,9 @@ export interface ParseError {
 // ════════════════════════════════════════════════════════════
 
 /**
- * 将 TCL 文本分解为 token 流。
- * 处理: 双引号字符串、花括号字面量、变量引用、方括号命令替换、注释、续行符。
+ * Break the TCL text into a token stream.
+ * Handles: double-quoted strings, braced literals, variable references,
+ * bracketed command substitution, comments and line continuations.
  */
 export function tokenize(text: string): Token[] {
     const tokens: Token[] = [];
@@ -158,31 +159,31 @@ export function tokenize(text: string): Token[] {
         const startCol = col;
         const ch = text[pos];
 
-        // 空白
+        // Whitespace
         if (ch === ' ' || ch === '\t' || ch === '\r') {
             advance();
             continue;
         }
 
-        // 换行
+        // Newline
         if (ch === '\n') {
             advance();
             tokens.push({ type: TokenType.NEWLINE, value: '\n', line: startLine, column: startCol, rawLength: 1 });
             continue;
         }
 
-        // 分号
+        // Semicolon
         if (ch === ';') {
             advance();
             tokens.push({ type: TokenType.SEMICOLON, value: ';', line: startLine, column: startCol, rawLength: 1 });
             continue;
         }
 
-        // 反斜杠续行
+        // Backslash line continuation
         if (ch === '\\' && peek() === '\n') {
             advance(); // \
             advance(); // \n
-            // 跳过续行后的空白
+            // Skip the whitespace after the continuation
             while (peek() === ' ' || peek() === '\t') {
                 advance();
             }
@@ -194,8 +195,8 @@ export function tokenize(text: string): Token[] {
             continue;
         }
 
-        // 注释（仅在行首或分号后有效）
-        // TCL 中 # 只有在新行开始或分号后才被视为注释起始符
+        // Comment (only valid at the start of a line or after a semicolon)
+        // In TCL a # only starts a comment at the beginning of a line or after a semicolon
         if (ch === '#') {
             const isFirstToken = tokens.length === 0;
             const lastToken = tokens.length > 0 ? tokens[tokens.length - 1] : null;
@@ -203,7 +204,7 @@ export function tokenize(text: string): Token[] {
                 (lastToken.type === TokenType.NEWLINE || lastToken.type === TokenType.SEMICOLON);
 
             if (isFirstToken || isAfterNewlineOrSemicolon) {
-                // 读取到行尾
+                // Read to the end of the line
                 let commentText = '';
                 const commentLine = line;
                 const commentCol = col;
@@ -219,30 +220,30 @@ export function tokenize(text: string): Token[] {
                 });
                 continue;
             }
-            // 否则 # 在命令参数中，作为普通字符处理
+            // Otherwise the # sits in a command argument and is an ordinary character
         }
 
-        // 双引号字符串
+        // Double-quoted string
         if (ch === '"') {
             const strLine = line;
             const strCol = col;
-            advance(); // 跳过开引号
+            advance(); // Skip the opening quote
             let strValue = '';
             while (pos < len && text[pos] !== '"') {
                 if (text[pos] === '\\' && pos + 1 < len) {
-                    strValue += advance(); // 反斜杠
-                    strValue += advance(); // 转义字符
+                    strValue += advance(); // Backslash
+                    strValue += advance(); // Escaped character
                 } else if (text[pos] === '\n') {
-                    // 多行字符串
+                    // Multi-line string
                     strValue += advance();
                 } else if (text[pos] === '$') {
-                    // 字符串内的变量引用 — 作为字符串内容
+                    // A variable reference inside a string stays part of the string content
                     strValue += advance();
                 } else {
                     strValue += advance();
                 }
             }
-            if (pos < len) { advance(); } // 跳过闭引号
+            if (pos < len) { advance(); } // Skip the closing quote
             tokens.push({
                 type: TokenType.STRING,
                 value: strValue,
@@ -253,11 +254,11 @@ export function tokenize(text: string): Token[] {
             continue;
         }
 
-        // 花括号字面量
+        // Braced literal
         if (ch === '{') {
             const braceLine = line;
             const braceCol = col;
-            advance(); // 跳过 {
+            advance(); // Skip the {
             let depth = 1;
             let braceValue = '';
             while (pos < len && depth > 0) {
@@ -277,7 +278,7 @@ export function tokenize(text: string): Token[] {
                     braceValue += advance();
                 }
             }
-            if (pos < len) { advance(); } // 跳过 }
+            if (pos < len) { advance(); } // Skip the }
             tokens.push({
                 type: TokenType.BRACED,
                 value: braceValue,
@@ -288,11 +289,11 @@ export function tokenize(text: string): Token[] {
             continue;
         }
 
-        // 方括号命令替换 — 作为 BRACED 类似处理（我们不深入解析嵌套命令）
+        // Bracketed command substitution — treated like BRACED (nested commands are not parsed)
         if (ch === '[') {
             const bracketLine = line;
             const bracketCol = col;
-            advance(); // 跳过 [
+            advance(); // Skip the [
             let depth = 1;
             let bracketValue = '';
             while (pos < len && depth > 0) {
@@ -321,7 +322,7 @@ export function tokenize(text: string): Token[] {
                 }
                 else { bracketValue += advance(); }
             }
-            if (pos < len) { advance(); } // 跳过 ]
+            if (pos < len) { advance(); } // Skip the ]
             tokens.push({
                 type: TokenType.BRACED,
                 value: `[${bracketValue}]`,
@@ -332,18 +333,18 @@ export function tokenize(text: string): Token[] {
             continue;
         }
 
-        // 变量引用
+        // Variable reference
         if (ch === '$') {
             const varLine = line;
             const varCol = col;
-            advance(); // 跳过 $
+            advance(); // Skip the $
             if (peek() === '{') {
-                advance(); // 跳过 {
+                advance(); // Skip the {
                 let varName = '';
                 while (pos < len && text[pos] !== '}') {
                     varName += advance();
                 }
-                if (pos < len) { advance(); } // 跳过 }
+                if (pos < len) { advance(); } // Skip the }
                 tokens.push({
                     type: TokenType.VARIABLE_REF,
                     value: varName,
@@ -353,15 +354,15 @@ export function tokenize(text: string): Token[] {
                 });
             } else {
                 let varName = '';
-                // TCL 变量名: 字母/数字/下划线，:: 为命名空间分隔符
-                // 单独的 : 不属于变量名（如 $BOTTOM_LAYER: 的 : 是字面字符）
+                // TCL variable names: letters/digits/underscores, with :: as the namespace separator
+                // A single : is not part of the name (the : in $BOTTOM_LAYER: is a literal character)
                 while (pos < len && /[a-zA-Z0-9_]/.test(text[pos])) {
                     varName += advance();
                 }
-                // 处理命名空间 :: 分隔符
+                // Handle the :: namespace separator
                 while (pos + 1 < len && text[pos] === ':' && text[pos + 1] === ':') {
-                    varName += advance(); // 第一个 :
-                    varName += advance(); // 第二个 :
+                    varName += advance(); // First :
+                    varName += advance(); // Second :
                     while (pos < len && /[a-zA-Z0-9_]/.test(text[pos])) {
                         varName += advance();
                     }
@@ -377,7 +378,7 @@ export function tokenize(text: string): Token[] {
             continue;
         }
 
-        // 普通词（命令名或参数）
+        // Plain word (command name or argument)
         let word = '';
         const wordLine = line;
         const wordCol = col;
@@ -385,7 +386,7 @@ export function tokenize(text: string): Token[] {
             word += advance();
         }
         if (word.length > 0) {
-            // 判断是否为行首命令：检查上一个非空白 token 是否为 NEWLINE/SEMICOLON
+            // Decide whether this starts a command: is the previous non-blank token a NEWLINE/SEMICOLON?
             let isCommand = true;
             for (let ti = tokens.length - 1; ti >= 0; ti--) {
                 const pt = tokens[ti];
@@ -406,7 +407,7 @@ export function tokenize(text: string): Token[] {
                 rawLength: word.length
             });
         }
-        // 如果 word 为空且 ch 不是空白等，直接跳过该字符（防止死循环）
+        // When word is empty and ch is not whitespace, skip the character (prevents an infinite loop)
         if (word.length === 0) {
             advance();
         }
@@ -421,15 +422,15 @@ export function tokenize(text: string): Token[] {
 // ════════════════════════════════════════════════════════════
 
 /**
- * 解析 token 流为 AST 节点列表。
- * 识别: set, source, proc 等关键命令，以及所有变量引用。
+ * Parse the token stream into a list of AST nodes.
+ * Recognizes the key commands (set, source, proc, ...) and every variable reference.
  */
 export function parse(filePath: string, text: string): ParseResult {
     const tokens = tokenize(text);
     const nodes: AstNode[] = [];
     const errors: ParseError[] = [];
 
-    // 分类收集
+    // Collect by category
     const sets: SetNode[] = [];
     const varRefs: VarRefNode[] = [];
     const sources: SourceNode[] = [];
@@ -439,17 +440,17 @@ export function parse(filePath: string, text: string): ParseResult {
     for (let i = 0; i < tokens.length; i++) {
         const token = tokens[i];
 
-        // 跳过换行、分号、注释、EOF
+        // Skip newlines, semicolons, comments and EOF
         if (token.type === TokenType.NEWLINE ||
             token.type === TokenType.SEMICOLON ||
             token.type === TokenType.COMMENT ||
             token.type === TokenType.EOF) {
-            // 检查是否为变量引用（token 流中的独立 $var）
-            // 实际上变量引用已经由 tokenizer 处理为 VARIABLE_REF
+            // Check for a variable reference (a standalone $var in the token stream)
+            // In practice the tokenizer already turned these into VARIABLE_REF
             continue;
         }
 
-        // 变量引用（独立出现在 token 流中，例如 expr {...} 或嵌套情况）
+        // Variable reference (standalone in the token stream, e.g. inside expr {...} or nested)
         if (token.type === TokenType.VARIABLE_REF) {
             const ref: VarRefNode = {
                 kind: 'var_ref',
@@ -464,13 +465,13 @@ export function parse(filePath: string, text: string): ParseResult {
             continue;
         }
 
-        // 处理命令（COMMAND 类型的 token）
+        // Handle a command (a COMMAND token)
         if (token.type === TokenType.COMMAND) {
             const cmdName = token.value;
             const cmdLine = token.line;
             const cmdCol = token.column;
 
-            // 收集此命令的所有参数 tokens
+            // Collect every argument token of this command
             const argTokens: Token[] = [];
             let lastIdx = i;
             for (let j = i + 1; j < tokens.length; j++) {
@@ -489,7 +490,7 @@ export function parse(filePath: string, text: string): ParseResult {
                 lastIdx = j;
             }
 
-            // 构建原始文本
+            // Build the raw text
             const rawParts: string[] = [cmdName];
             for (const a of argTokens) {
                 if (a.type === TokenType.STRING) { rawParts.push(`"${a.value}"`); }
@@ -498,14 +499,14 @@ export function parse(filePath: string, text: string): ParseResult {
             }
             const rawText = rawParts.join(' ');
 
-            // ---- 处理 set 命令 ----
+            // ---- Handle the set command ----
             if (cmdName === 'set' && argTokens.length >= 2) {
                 const varToken = argTokens[0];
                 const varName = varToken.value;
-                // 值 tokens 从 index 1 开始
+                // The value tokens start at index 1
                 const valueTokens = argTokens.slice(1);
 
-                // 检查值 tokens 中是否有变量引用
+                // Check whether the value tokens contain variable references
                 for (const vt of valueTokens) {
                     if (vt.type === TokenType.VARIABLE_REF) {
                         const ref: VarRefNode = {
@@ -519,7 +520,7 @@ export function parse(filePath: string, text: string): ParseResult {
                         nodes.push(ref);
                         varRefs.push(ref);
                     }
-                    // 也检查 STRING 和 BRACED 中的 $ 符号
+                    // Also look for $ inside STRING and BRACED tokens
                     if (vt.type === TokenType.STRING || vt.type === TokenType.BRACED) {
                         extractVarRefsFromText(vt.value, vt.line, vt.column)
                             .forEach(r => {
@@ -529,7 +530,7 @@ export function parse(filePath: string, text: string): ParseResult {
                     }
                 }
 
-                // 构建值文本（用于简单值解析）
+                // Build the value text (used for simple value parsing)
                 const valueText = valueTokens.map(t => {
                     if (t.type === TokenType.STRING) { return `"${t.value}"`; }
                     if (t.type === TokenType.BRACED) { return t.value; }
@@ -548,22 +549,22 @@ export function parse(filePath: string, text: string): ParseResult {
                 nodes.push(setNode);
                 sets.push(setNode);
             }
-            // ---- 处理 source 命令 ----
+            // ---- Handle the source command ----
             else if (cmdName === 'source' && argTokens.length >= 1) {
-                // 拼接所有参数 token 形成完整路径（支持 $var/path/subpath 拼接）
+                // Join every argument token into the full path (supports $var/path/subpath)
                 let filePath = '';
                 for (const at of argTokens) {
                     if (at.type === TokenType.VARIABLE_REF) {
                         filePath += '$' + at.value;
                     } else if (at.type === TokenType.STRING) {
-                        filePath += at.value; // 双引号字符串，value 不含引号
+                        filePath += at.value; // Double-quoted string, value excludes the quotes
                     } else if (at.type === TokenType.BRACED) {
-                        filePath += at.value; // 花括号内容
+                        filePath += at.value; // Braced content
                     } else {
                         filePath += at.value;
                     }
                 }
-                // 去掉首尾空白
+                // Trim the surrounding whitespace
                 filePath = filePath.trim();
                 const sourceNode: SourceNode = {
                     kind: 'source',
@@ -575,11 +576,11 @@ export function parse(filePath: string, text: string): ParseResult {
                 nodes.push(sourceNode);
                 sources.push(sourceNode);
             }
-            // ---- 处理 proc 命令 ----
+            // ---- Handle the proc command ----
             else if (cmdName === 'proc' && argTokens.length >= 3) {
                 const procToken = argTokens[0];
                 const procName = procToken.value;
-                // args 在花括号中 — 使用 TCL 列表解析（支持 {arg default} 默认值语法）
+                // The args sit in braces — parsed as a TCL list (supports the {arg default} syntax)
                 const argsToken = argTokens[1];
                 let argsStr = '';
                 if (argsToken.type === TokenType.BRACED) {
@@ -589,7 +590,7 @@ export function parse(filePath: string, text: string): ParseResult {
                 }
                 const args = parseProcArgs(argsStr);
 
-                // 提取 body 文本（argTokens[2..] 合并）
+                // Extract the body text (joining argTokens[2..])
                 const bodyStartLine = argTokens[2].line;
                 const bodyEndLine = getTokenEndLine(argTokens[argTokens.length - 1], tokens);
                 const bodyTextParts: string[] = [];
@@ -612,7 +613,7 @@ export function parse(filePath: string, text: string): ParseResult {
                 nodes.push(procNode);
                 procs.push(procNode);
 
-                // proc body 中的变量引用也需要提取
+                // Variable references inside the proc body must be extracted too
                 for (let k = 2; k < argTokens.length; k++) {
                     const at = argTokens[k];
                     if (at.type === TokenType.BRACED || at.type === TokenType.STRING) {
@@ -624,7 +625,7 @@ export function parse(filePath: string, text: string): ParseResult {
                     }
                 }
             }
-            // ---- 通用命令 ----
+            // ---- Generic command ----
             else {
                 const cmdNode: CommandNode = {
                     kind: 'command',
@@ -637,7 +638,7 @@ export function parse(filePath: string, text: string): ParseResult {
                 nodes.push(cmdNode);
                 commands.push(cmdNode);
 
-                // 提取命令参数中的变量引用
+                // Extract the variable references from the command arguments
                 for (const at of argTokens) {
                     if (at.type === TokenType.VARIABLE_REF) {
                         const ref: VarRefNode = {
@@ -661,12 +662,12 @@ export function parse(filePath: string, text: string): ParseResult {
                 }
             }
 
-            // 跳到此命令的最后一个 token
+            // Jump to the last token of this command
             i = lastIdx;
             continue;
         }
 
-        // 其他 token 类型（WORD 等不在命令开头的），跳过
+        // Other token types (a WORD that does not start a command, etc.) are skipped
     }
 
     return {
@@ -682,50 +683,50 @@ export function parse(filePath: string, text: string): ParseResult {
 }
 
 /**
- * 从文本中提取 $varName 和 ${varName} 变量引用。
- * 用于 STRING 和 BRACED token 内部的变量引用提取。
- * 支持多行文本，自动计算每个引用的实际行号和列号。
- * 自动跳过 TCL 注释行（# 开头）和行内注释（;# 之后）中的变量引用。
+ * Extract the $varName and ${varName} variable references from a piece of text.
+ * Used to pull the variable references out of STRING and BRACED tokens.
+ * Multi-line text is supported; the real line and column of every reference is computed.
+ * References inside TCL comment lines (starting with #) and trailing comments (after ;#) are skipped.
  */
 function extractVarRefsFromText(text: string, baseLine: number, baseCol: number): VarRefNode[] {
     const refs: VarRefNode[] = [];
 
-    // 匹配 $varName (不包含 ${varName})
-    // 命名空间 :: 分隔符有效，单独 : 不属于变量名
+    // Match $varName (not ${varName})
+    // The :: namespace separator is valid, a single : is not part of the name
     const regex = /\$(\{?)([a-zA-Z_][a-zA-Z0-9_]*(?:::[a-zA-Z0-9_]*)*)\}?/g;
     let match: RegExpExecArray | null;
     while ((match = regex.exec(text)) !== null) {
         const isBraceForm = match[1] === '{';
         const varName = match[2];
 
-        // 计算 match.index 之前的文本，确定实际行号和列号
+        // Look at the text before match.index to work out the real line and column
         const textBefore = text.substring(0, match.index);
         const linesBefore = textBefore.split('\n');
         const newlineCount = linesBefore.length - 1;
         const line = baseLine + newlineCount;
 
-        // ── 跳过注释中的 $var 引用 ──
-        // 获取当前行中 match 之前的文本（从最后一个换行符之后到 match 位置）
+        // ── Skip $var references inside comments ──
+        // Take the text of the current line before the match (from the last newline to the match)
         const currentLineText = newlineCount > 0
             ? linesBefore[linesBefore.length - 1]
             : textBefore;
-        // 如果该行去掉前导空白后以 # 开头，或是 ;# 之后的文本，则跳过
+        // Skip when the line starts with # after trimming, or the match sits after a ;#
         const trimmedLine = currentLineText.trimStart();
         if (trimmedLine.startsWith('#')) {
-            continue;  // 整行注释
+            continue;  // Whole-line comment
         }
-        // 检查 ;# 行内注释：match 出现在 ;# 之后
+        // Check the ;# trailing comment: the match appears after the ;#
         const inlineCommentIdx = currentLineText.indexOf(';#');
         if (inlineCommentIdx >= 0 && match.index > textBefore.lastIndexOf('\n') + inlineCommentIdx) {
-            continue;  // 行内注释之后
+            continue;  // After a trailing comment
         }
 
-        // 列号：最后一个换行符之后的位置
-        // baseCol 指向外层 token 的起始位置（如 { 或 "）
-        // text 是 token 内部文本（不含外层定界符）
+        // Column: the offset after the last newline
+        // baseCol points at the start of the enclosing token (the { or ")
+        // text is the inner token text (without the enclosing delimiters)
         const col = newlineCount > 0
             ? linesBefore[linesBefore.length - 1].length + 1  // 1-based column on new line
-            : baseCol + match.index + 1;  // 同一行：baseCol + 1(跳过定界符) + match.index
+            : baseCol + match.index + 1;  // Same line: baseCol + 1 (skip the delimiter) + match.index
 
         refs.push({
             kind: 'var_ref',
@@ -739,28 +740,28 @@ function extractVarRefsFromText(text: string, baseLine: number, baseCol: number)
     return refs;
 }
 
-/** 获取 token 的结束行号 */
+/** Get the end line number of a token */
 function getTokenEndLine(token: Token, allTokens: Token[]): number {
-    // 简化处理：返回 token 的行号
-    // 对于跨行 token（多行字符串或花括号块），需要更复杂的计算
+    // Simplification: return the line of the token
+    // Tokens that span lines (multi-line strings or braced blocks) would need more work
     return token.line;
 }
 
 // ════════════════════════════════════════════════════════════
-//  Proc 参数解析
+//  Proc argument parsing
 // ════════════════════════════════════════════════════════════
 
 /**
- * 解析 proc 参数列表，正确支持 TCL 默认值语法 {argName defaultValue}。
+ * Parse a proc argument list, correctly supporting the TCL default-value syntax {argName defaultValue}.
  *
- * TCL proc 参数格式:
+ * TCL proc argument format:
  *   proc name {arg1 arg2 {arg3 defaultVal}} {body}
  *
- * 其中 {arg3 defaultVal} 是一个 TCL 列表元素，表示 arg3 有默认值。
- * 简单 split 会错误地将 "{arg3" 和 "defaultVal}" 拆分为两个参数。
+ * Here {arg3 defaultVal} is a single TCL list element meaning arg3 has a default value.
+ * A naive split would wrongly turn "{arg3" and "defaultVal}" into two arguments.
  *
- * @param argsStr - 参数花括号内的原始文本（不含外层花括号）
- * @returns 参数名列表（仅参数名，不含默认值）
+ * @param argsStr - the raw text inside the argument braces (without the outer braces)
+ * @returns the argument names only (without the default values)
  */
 export function parseProcArgs(argsStr: string): string[] {
     const argNames: string[] = [];
@@ -768,15 +769,15 @@ export function parseProcArgs(argsStr: string): string[] {
     const len = argsStr.length;
 
     while (i < len) {
-        // 跳过空白
+        // Skip whitespace
         while (i < len && /\s/.test(argsStr[i])) { i++; }
         if (i >= len) { break; }
 
         if (argsStr[i] === '{') {
-            // 花括号元素: {argName defaultValue} — 作为一个原子元素
+            // Braced element: {argName defaultValue} — treated as one atomic element
             let depth = 1;
             let element = '';
-            i++; // 跳过开 {
+            i++; // Skip the opening {
             while (i < len && depth > 0) {
                 if (argsStr[i] === '{') { depth++; element += argsStr[i]; }
                 else if (argsStr[i] === '}') {
@@ -787,12 +788,12 @@ export function parseProcArgs(argsStr: string): string[] {
                 }
                 i++;
             }
-            // element 现在是 "{argName defaultValue}" 花括号内的文本
-            // 提取第一个词作为参数名
+            // element now holds the text inside "{argName defaultValue}"
+            // Take the first word as the argument name
             const firstWord = element.trim().split(/\s+/)[0];
             if (firstWord) { argNames.push(firstWord); }
         } else {
-            // 普通词
+            // Plain word
             let word = '';
             while (i < len && !/\s/.test(argsStr[i])) {
                 word += argsStr[i];
@@ -806,21 +807,21 @@ export function parseProcArgs(argsStr: string): string[] {
 }
 
 // ════════════════════════════════════════════════════════════
-//  工具函数
+//  Helper functions
 // ════════════════════════════════════════════════════════════
 
 /**
- * 将 TCL 值文本解析为简单值。
- * 处理: 引号去除、花括号去除、简单变量值。
+ * Parse a TCL value text into a simple value.
+ * Handles: quote stripping, brace stripping and simple variable values.
  */
 export function resolveSimpleValue(valueText: string): string {
     let val = valueText.trim();
 
-    // 去除双引号
+    // Strip the double quotes
     if (val.startsWith('"') && val.endsWith('"')) {
         val = val.slice(1, -1);
     }
-    // 去除花括号
+    // Strip the braces
     if (val.startsWith('{') && val.endsWith('}')) {
         val = val.slice(1, -1);
     }
@@ -829,9 +830,9 @@ export function resolveSimpleValue(valueText: string): string {
 }
 
 /**
- * 检测值文本中是否包含变量引用（未解析的 $）。
+ * Detect whether a value text still contains variable references (an unresolved $).
  */
 export function containsVarRef(valueText: string): boolean {
-    // 检查是否有 $ 但不是 TCL 命令替换 $
+    // Check for a $ that is not a TCL command substitution
     return /\$[a-zA-Z_{]/.test(valueText);
 }

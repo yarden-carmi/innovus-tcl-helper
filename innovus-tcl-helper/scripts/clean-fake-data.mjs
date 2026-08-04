@@ -1,7 +1,12 @@
 #!/usr/bin/env node
 /**
- * 仿真假数据清理脚本
- * 扫描 .tcl 文件中的假数值输出，替换为纯描述性文字
+ * Fake simulation data cleaner.
+ * Scans the .tcl files for fabricated numeric output and replaces it with plain
+ * descriptive text.
+ *
+ * NOTE: the Chinese literals below are DATA, not UI text — the patterns match the
+ * Chinese (cn) simulation files and the replacements are written back into them.
+ * Translating them would stop the script from matching the cn data set.
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -26,7 +31,7 @@ for (const file of files) {
     let modified = false;
     const original = content;
 
-    // 模式 1: 假时序数值 "Slack -0.xxxns", "WNS -0.xxx", "TNS -0.xxx"
+    // Pattern 1: fake timing numbers "Slack -0.xxxns", "WNS -0.xxx", "TNS -0.xxx"
     content = content.replace(
         /puts\s+"([^"]*Slack\s*[:-]?\s*-?[0-9]+\.[0-9]+(?:ns|ps)[^"]*)"/gi,
         (match, text) => {
@@ -35,7 +40,7 @@ for (const file of files) {
         }
     );
 
-    // 模式 2: 假偏斜/延迟 "Skew 0.xxxns", "delay 0.xxxns"
+    // Pattern 2: fake skew/delay "Skew 0.xxxns", "delay 0.xxxns"
     content = content.replace(
         /puts\s+"([^"]*[Ss]kew\s*[:-]?\s*[0-9]+\.[0-9]+(?:ns|ps)[^"]*)"/g,
         (match, text) => {
@@ -51,7 +56,7 @@ for (const file of files) {
         }
     );
 
-    // 模式 3: 假面积/长度 "123.45 μm²", "567.89 μm"
+    // Pattern 3: fake area/length "123.45 μm²", "567.89 μm"
     content = content.replace(
         /puts\s+"([^"]*[0-9]+\.[0-9]+\s*(?:μm²?|um²?|mm²?|nm)[^"]*)"/g,
         (match, text) => {
@@ -61,7 +66,7 @@ for (const file of files) {
         }
     );
 
-    // 模式 4: 假磁盘/内存 "50GB", "32.1GB", "17.9GB"
+    // Pattern 4: fake disk/memory "50GB", "32.1GB", "17.9GB"
     content = content.replace(
         /puts\s+"([^"]*[0-9]+(?:\.[0-9]+)?\s*[GMK]B[^"]*)"/g,
         (match, text) => {
@@ -71,7 +76,7 @@ for (const file of files) {
         }
     );
 
-    // 模式 5: 假计数 "满足条件的信号数量为 3" / "Total: 4" / "found 42"
+    // Pattern 5: fake counts "满足条件的信号数量为 3" / "Total: 4" / "found 42"
     content = content.replace(
         /puts\s+"([^"]*(?:数量|数量为|Total|total|found|Found|count|Count)\s*[:-]?\s*[0-9]+[^"]*)"/g,
         (match, text) => {
@@ -80,7 +85,7 @@ for (const file of files) {
         }
     );
 
-    // 模式 6: 假时钟频率 "100MHz", "2.5GHz"
+    // Pattern 6: fake clock frequencies "100MHz", "2.5GHz"
     content = content.replace(
         /puts\s+"([^"]*(?:频率|frequency|Frequency|时钟|clock|Clock)[^"]*[0-9]+(?:\.[0-9]+)?\s*[MG]Hz[^"]*)"/gi,
         (match, text) => {
@@ -94,12 +99,12 @@ for (const file of files) {
         totalFixed++;
     }
 
-    // 模式 7: 完全替换全行假数据 puts（针对明显的报告类假数据）
-    // 如: puts "时序报告: 路径数 10, Slack -0.123ns" → puts "生成时序报告: 路径数 10"
+    // Pattern 7: rewrite a whole fake-data puts line (aimed at obvious report-style fakes)
+    // e.g. puts "时序报告: 路径数 10, Slack -0.123ns" → puts "生成时序报告: 路径数 10"
     content = content.replace(
         /puts\s+"([^"]*(?:报告|report|Report|生成|generating|Generating)[^"]*)"\s*$/gm,
         (match) => {
-            // 检查是否包含假数值
+            // Check whether it contains fabricated numbers
             if (/[0-9]+\.[0-9]+(?:ns|ps|μm|um|GHz|MHz)/.test(match)) {
                 const cleaned = match.replace(
                     /,\s*(?:Slack|slack|Skew|skew|WNS|TNS|延迟|偏斜|面积|长度)\s*[:-]?\s*-?[0-9]+\.[0-9]+(?:ns|ps|μm|um|GHz|MHz|μm²|ns\))?/g,
@@ -120,7 +125,7 @@ for (const file of files) {
     }
 }
 
-console.log(`\n${DRY_RUN ? '🔍 DRY RUN' : '✅ 已修复'} ${totalFiles} 个文件 (${LANG})`);
+console.log(`\n${DRY_RUN ? '🔍 DRY RUN' : '✅ Fixed'} ${totalFiles} files (${LANG})`);
 if (DRY_RUN) {
-    console.log('   使用 --apply 参数实际写入修改');
+    console.log('   Pass --apply to actually write the changes');
 }

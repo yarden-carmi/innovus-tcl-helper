@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * TCL 仿真语法检查器 — 用 tclsh 批量检测所有仿真文件的 TCL 代码
+ * TCL simulation syntax checker — batch-checks the TCL code of every simulation file with tclsh
  *
- * 用法:
+ * Usage:
  *   node scripts/validate-simulations.mjs [--lang cn|en] [--fix]
- *   --fix  自动尝试修复常见的 AI 生成语法错误
+ *   --fix  automatically try to repair the common AI-generated syntax errors
  */
 
 const fs = require('fs');
@@ -17,7 +17,7 @@ const args = process.argv.slice(2);
 const LANG = args.includes('--lang') ? args[args.indexOf('--lang') + 1] : 'cn';
 const FIX = args.includes('--fix');
 
-// 查找 tclsh
+// Locate tclsh
 function findTclsh() {
     const platform = `${os.platform()}-${os.arch()}`;
     const binName = os.platform() === 'win32' ? 'tclsh9.0.exe' : 'tclsh9.0';
@@ -40,23 +40,23 @@ function findTclsh() {
     return null;
 }
 
-// 常见的 AI 生成语法错误修复
+// Repair the common AI-generated syntax errors
 function fixCommonErrors(tcl) {
     let fixed = tcl;
 
-    // 1. switch 语句中 -word{ 缺空格 → -word {
+    // 1. Missing space in a switch statement: -word{ → -word {
     fixed = fixed.replace(/(-[a-zA-Z_][a-zA-Z0-9_]*) \{/g, (match, word) => {
-        // 在 switch 上下文中，-word { 是正确的，不需修复
+        // In a switch context -word { is already correct, nothing to fix
         return match;
     });
     fixed = fixed.replace(/(-[a-zA-Z_][a-zA-Z0-9_]*)\{(?!\s)/g, '$1 {');
 
-    // 2. 字符串中未转义的特殊字符（在 [...] 内部的引号问题）
-    // 3. if/while/foreach 后面缺空格
+    // 2. Unescaped special characters in strings (quote problems inside [...])
+    // 3. Missing space after if/while/foreach
     fixed = fixed.replace(/\b(if|while|foreach|switch)\{/g, '$1 {');
     fixed = fixed.replace(/\}(elseif|else)\{/g, '} $1 {');
 
-    // 4. 注释标记后的 proc 误识别
+    // 4. proc misdetected after a comment marker
     // (no-op for now)
 
     return fixed;
@@ -68,12 +68,12 @@ async function main() {
 
     const tclsh = findTclsh();
     if (!tclsh) {
-        console.error('❌ 未找到 tclsh');
+        console.error('❌ tclsh not found');
         process.exit(1);
     }
     console.log(`🔧 tclsh: ${tclsh}`);
-    console.log(`📂 目录: ${simDir}`);
-    console.log(`📊 共 ${files.length} 个仿真文件`);
+    console.log(`📂 Directory: ${simDir}`);
+    console.log(`📊 ${files.length} simulation files`);
     console.log('');
 
     let ok = 0, err = 0, fixed = 0;
@@ -87,14 +87,14 @@ async function main() {
             let tcl = fs.readFileSync(filePath, 'utf-8').trim();
 
             if (!tcl.includes('proc ')) {
-                console.log(`⚠ ${cmdName}: 无 proc 定义`);
+                console.log(`⚠ ${cmdName}: no proc definition`);
                 continue;
             }
 
-            // 构建测试脚本：定义 proc 然后验证
+            // Build the test script: define the proc, then verify it
             const testScript = tcl + `\nputs "OK:${cmdName}"\n`;
 
-            // 写入临时文件（避免 tclsh -e 的多行参数问题）
+            // Write a temporary file (avoids the multi-line argument problem of tclsh -e)
             const tmpFile = path.join(os.tmpdir(), `tcl_check_${cmdName}.tcl`);
             fs.writeFileSync(tmpFile, testScript, 'utf-8');
 
@@ -104,7 +104,7 @@ async function main() {
                 encoding: 'utf-8'
             });
 
-            // 清理临时文件
+            // Clean up the temporary file
             try { fs.unlinkSync(tmpFile); } catch (e) { }
 
             const stdout = r.stdout || '';
@@ -112,9 +112,9 @@ async function main() {
 
             if (r.status === 0 && stdout.includes(`OK:${cmdName}`) && !stderr) {
                 ok++;
-                if (ok % 200 === 0) process.stdout.write(`\r  已检测 ${ok}/${files.length}...`);
+                if (ok % 200 === 0) process.stdout.write(`\r  checked ${ok}/${files.length}...`);
             } else {
-                // 有错误
+                // Something failed
                 const errMsg = stderr || stdout || `exit code ${r.status}`;
                 errors.push({ cmd: cmdName, msg: errMsg, path: filePath });
 
@@ -123,8 +123,8 @@ async function main() {
                     if (fixedTcl !== tcl) {
                         fs.writeFileSync(filePath, fixedTcl.trim() + '\n', 'utf-8');
                         fixed++;
-                        console.log(`\n🔧 ${cmdName}: 已自动修复`);
-                        // 重试（临时文件方式）
+                        console.log(`\n🔧 ${cmdName}: auto-repaired`);
+                        // Retry (through the temporary file)
                         const tmpFile2 = path.join(os.tmpdir(), `tcl_fix_${cmdName}.tcl`);
                         fs.writeFileSync(tmpFile2, fixedTcl + `\nputs "OK:${cmdName}"\n`, 'utf-8');
                         const r2 = cp.spawnSync(tclsh, [tmpFile2], {
@@ -133,14 +133,14 @@ async function main() {
                         try { fs.unlinkSync(tmpFile2); } catch (e) { }
                         if (r2.status === 0 && r2.stdout.includes(`OK:${cmdName}`)) {
                             ok++;
-                            console.log(`   ✅ 修复后通过`);
+                            console.log(`   ✅ Passes after the repair`);
                             continue;
                         } else {
-                            console.log(`   ❌ 修复后仍失败:`, (r2.stderr || r2.stdout || '').split('\n')[0]);
+                            console.log(`   ❌ Still failing after the repair:`, (r2.stderr || r2.stdout || '').split('\n')[0]);
                         }
                     }
                 } else {
-                    // 每发现一个错误立即输出
+                    // Print every error as soon as it is found
                     console.log(`\n❌ ${cmdName}`);
                     console.log(`   ${errMsg.split('\n').slice(0, 3).join('\n   ')}`);
                 }
@@ -155,24 +155,24 @@ async function main() {
 
     console.log('');
     console.log('═══════════════════════════════════════');
-    console.log(`✅ ${ok} 通过  ❌ ${err} 失败`);
-    if (FIX) console.log(`🔧 ${fixed} 已自动修复`);
+    console.log(`✅ ${ok} passed  ❌ ${err} failed`);
+    if (FIX) console.log(`🔧 ${fixed} auto-repaired`);
     console.log(`📂 ${simDir}`);
 
-    // 输出失败列表
+    // Print the failure list
     if (errors.length > 0) {
         console.log('');
-        console.log('── 失败详情 ──');
-        // 按错误类型归类
+        console.log('── Failure details ──');
+        // Group by error type
         const byType = {};
         errors.forEach(e => {
             const type = e.msg.split('\n')[0].substring(0, 60);
             byType[type] = (byType[type] || []).concat(e.cmd);
         });
         for (const [type, cmds] of Object.entries(byType)) {
-            console.log(`\n[${cmds.length}个] ${type}`);
+            console.log(`\n[${cmds.length}] ${type}`);
             cmds.slice(0, 10).forEach(c => console.log(`  - ${c}`));
-            if (cmds.length > 10) console.log(`  ... 还有 ${cmds.length - 10} 个`);
+            if (cmds.length > 10) console.log(`  ... and ${cmds.length - 10} more`);
         }
     }
 }

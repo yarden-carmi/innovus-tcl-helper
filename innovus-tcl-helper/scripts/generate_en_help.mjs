@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 /**
- * 英文 help .log → 结构化 JSON 批量转换脚本
+ * Batch converter: English help .log → structured JSON
  *
- * 用法:
+ * Usage:
  *   node scripts/generate_en_help.mjs
  *
- * 输入: data_base/en/ori_logs/help_logs/help_<cmd>.log
- * 输出: data_base/en/help/help_<cmd>.json
+ * Input:  data_base/en/ori_logs/help_logs/help_<cmd>.log
+ * Output: data_base/en/help/help_<cmd>.json
  *
- * 输出格式与 data_base/cn/help/ 一致，可直接被插件加载
+ * The output format matches data_base/cn/help/ and loads directly into the extension.
  */
 
 import * as fs from 'fs';
@@ -18,21 +18,21 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// 路径配置
+// Path configuration
 // scripts/ → innovus-tcl-helper/ → vscode-plugins/ → data_base/
 const ROOT = path.join(__dirname, '..', '..');
 const LOG_DIR = path.join(ROOT, 'data_base', 'en', 'ori_logs', 'help_logs');
 const OUT_DIR = path.join(ROOT, 'data_base', 'en', 'help');
 
-// ===================== 解析器（与 src/parser.ts 一致） =====================
+// ===================== Parser (mirrors src/parser.ts) =====================
 
 /**
- * 解析英文 help .log 原始文本为结构化 JSON
+ * Parse the raw English help .log text into structured JSON
  */
 function parseHelpLog(cmdName, content) {
     const lines = content.split('\n');
 
-    // 跳过 license/version header lines
+    // Skip the license/version header lines
     let startIdx = 0;
     for (let i = 0; i < lines.length; i++) {
         const t = lines[i].trim();
@@ -42,13 +42,13 @@ function parseHelpLog(cmdName, content) {
         }
     }
 
-    // 检查是否为模式变量（非命令）- 以 # 开头而非 Usage
+    // Detect a mode variable (not a command) — it starts with # instead of Usage
     const trimmedContent = content.trim();
     const isCmd = lines.some(l => l.trim().startsWith('Usage:'));
 
     if (!isCmd) {
-        // 模式变量 / 设置项，不是真正的命令
-        // 提取注释作为描述
+        // A mode variable / setting rather than a real command.
+        // Use the comments as its description.
         let description = '';
         for (const line of lines) {
             const t = line.trim();
@@ -67,7 +67,7 @@ function parseHelpLog(cmdName, content) {
         };
     }
 
-    // 提取 Usage 行（可能跨多行）
+    // Extract the Usage line (it may span several lines)
     let usage = '';
     let optionLines = [];
     let inUsage = true;
@@ -78,15 +78,15 @@ function parseHelpLog(cmdName, content) {
         const trimmed = line.trim();
 
         if (inUsage) {
-            // Usage 行或以大量空格缩进开始的续行
+            // The Usage line, or a continuation starting with a deep indent
             if (trimmed.startsWith('Usage:') || (foundUsage && line.match(/^\s{10,}[-\[]/))) {
                 usage += (usage ? ' ' : '') + trimmed;
                 foundUsage = true;
             } else if (trimmed.startsWith('Description:')) {
-                // 跳过 Description 行
+                // Skip the Description line
                 continue;
             } else if (trimmed.startsWith('-') || trimmed.startsWith('<')) {
-                // 第一个 option 行
+                // The first option line
                 inUsage = false;
                 optionLines.push(line);
             } else if (trimmed === '' && foundUsage) {
@@ -103,8 +103,8 @@ function parseHelpLog(cmdName, content) {
 
     const options = parseOptions(optionLines);
 
-    // 如果没有解析到 options 但有 usage（比如只有 -help 的命令），
-    // 至少添加 -help 选项
+    // When no options were parsed but a usage exists (e.g. a command with only -help),
+    // add at least the -help option
     if (options.length === 0 && usage) {
         options.push({
             name: '-help',
@@ -133,7 +133,7 @@ function parseOptions(lines) {
 
     for (const line of lines) {
         const trimmed = line.trim();
-        // 匹配 -flagName 或 <positionalArg>
+        // Match -flagName or <positionalArg>
         const optionMatch = trimmed.match(/^(\s*)(-\w+|<\w+>)\b/);
         if (optionMatch) {
             if (currentOption) {
@@ -202,17 +202,17 @@ function buildOption(name, lines) {
     };
 }
 
-// ===================== 摘要生成 =====================
+// ===================== Summary generation =====================
 
 /**
- * 根据命令名生成合理的英文摘要
+ * Generate a sensible English summary from the command name
  * e.g. "addInst" → "Adds an instance to the design."
  *      "checkDesign" → "Checks the design."
  *      "report_timing" → "Reports timing analysis."
  *      "setPlaceMode" → "Sets placement mode options."
  */
 function generateSummary(cmdName) {
-    // 分离 camelCase 和 snake_case
+    // Split camelCase and snake_case
     const words = cmdName
         .replace(/([a-z])([A-Z])/g, '$1 $2')     // camelCase → words
         .replace(/_/g, ' ')                        // snake_case → words
@@ -225,7 +225,7 @@ function generateSummary(cmdName) {
     const first = words[0];
     const rest = words.slice(1).join(' ');
 
-    // 动词映射
+    // Verb mapping
     const verbMap = {
         'add': ['Adds', ''],
         'check': ['Checks', ''],
@@ -302,23 +302,23 @@ function generateSummary(cmdName) {
         return `${verb} ${obj}.`;
     }
 
-    // 默认
+    // Fallback
     return `Executes the '${cmdName}' command.`;
 }
 
-// ===================== 主流程 =====================
+// ===================== Main =====================
 
 function main() {
     if (!fs.existsSync(LOG_DIR)) {
-        console.error(`❌ 源目录不存在: ${LOG_DIR}`);
+        console.error(`❌ Source directory not found: ${LOG_DIR}`);
         process.exit(1);
     }
 
-    // 确保输出目录存在
+    // Make sure the output directory exists
     fs.mkdirSync(OUT_DIR, { recursive: true });
 
     const logFiles = fs.readdirSync(LOG_DIR).filter(f => f.endsWith('.log'));
-    console.log(`📂 找到 ${logFiles.length} 个 .log 文件`);
+    console.log(`📂 Found ${logFiles.length} .log files`);
 
     let success = 0;
     let failed = 0;
@@ -333,7 +333,7 @@ function main() {
 
         const outFile = path.join(OUT_DIR, file.replace(/\.log$/, '.json'));
 
-        // 如果 JSON 已存在且比 .log 新，跳过
+        // Skip when the JSON already exists and is newer than the .log
         const logStat = fs.statSync(path.join(LOG_DIR, file));
         if (fs.existsSync(outFile)) {
             const jsonStat = fs.statSync(outFile);
@@ -347,9 +347,9 @@ function main() {
             const content = fs.readFileSync(path.join(LOG_DIR, file), 'utf-8');
             const info = parseHelpLog(cmdName, content);
 
-            // 验证基本结构
+            // Validate the basic structure
             if (!info.command) {
-                throw new Error('解析结果无命令名');
+                throw new Error('The parse result has no command name');
             }
 
             fs.writeFileSync(outFile, JSON.stringify(info, null, 2), 'utf-8');
@@ -362,8 +362,8 @@ function main() {
         }
     }
 
-    console.log(`\n✅ 完成: ${success} 成功, ${failed} 失败, ${skipped} 跳过`);
-    console.log(`📁 输出目录: ${OUT_DIR}`);
+    console.log(`\n✅ Done: ${success} succeeded, ${failed} failed, ${skipped} skipped`);
+    console.log(`📁 Output directory: ${OUT_DIR}`);
 }
 
 main();

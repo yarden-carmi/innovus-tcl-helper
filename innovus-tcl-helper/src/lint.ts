@@ -1,42 +1,32 @@
 /**
- * Lint Provider — TCL 跨文件静态检查
+ * Lint Provider — cross-file static checking for TCL
  *
- * 基于 TclCompiler 编译结果生成 VS Code Diagnostics，
- * 并提供 MCP 可用的 Lint 报告接口。
+ * Turns the TclCompiler results into VS Code diagnostics and exposes
+ * a lint report interface usable from MCP.
  *
- * 检查项:
- *   1. 未定义变量引用
- *   2. 变量使用在定义之前（顺序警告）
- *   3. 文件不存在（.f 文件中引用的文件）
- *   4. source 引用的文件不存在
- *   5. 变量重复赋值但不使用
- *   6. proc 定义但未被调用
- *   7. 空 set 命令（set var 无值）
+ * Checks:
+ *   1. References to undefined variables
+ *   2. Variables used before they are defined (ordering warning)
+ *   3. Missing files (files referenced by the .f file)
+ *   4. Missing files referenced by source
+ *   5. Variables assigned repeatedly but never used
+ *   6. procs that are defined but never called
+ *   7. Empty set commands (set var with no value)
  */
 
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { TclCompiler, CompileResult, VariableInfo, CompileError, CompileWarning } from './compiler';
+import { t } from './i18n';
 
 // ════════════════════════════════════════════════════════════
-//  配置
+//  Configuration
 // ════════════════════════════════════════════════════════════
 
 const DIAGNOSTIC_SOURCE = 'innovus-tcl-lint';
 
-/** Lint 严格程度 */
+/** Lint strictness */
 export type LintLevel = 'basic' | 'standard' | 'strict';
-
-/** 解析当前语言设置 */
-function resolveLintLanguage(): 'zh' | 'en' {
-    const configLang = vscode.workspace.getConfiguration('innovus-tcl')
-        .get<string>('language', 'auto');
-    if (configLang === 'auto') {
-        const vsLang = vscode.env.language.toLowerCase();
-        return vsLang.startsWith('zh') ? 'zh' : 'en';
-    }
-    return configLang === 'zh' ? 'zh' : 'en';
-}
 
 // ════════════════════════════════════════════════════════════
 //  Lint Provider
@@ -53,42 +43,42 @@ export class TclLintProvider {
         this.compiler = new TclCompiler();
     }
 
-    /** 获取编译器实例 */
+    /** Get the compiler instance */
     getCompiler(): TclCompiler {
         return this.compiler;
     }
 
-    /** 获取最近一次编译结果 */
+    /** Get the most recent compilation result */
     getLastResult(): CompileResult | null {
         return this.lastResult;
     }
 
-    /** 获取工作区根目录 */
+    /** Get the workspace root directory */
     getWorkspaceRoot(): string {
         return this.workspaceRoot;
     }
 
-    /** 获取当前 lint 级别 */
+    /** Get the current lint level */
     private getLevel(): LintLevel {
         return vscode.workspace.getConfiguration('innovus-tcl')
             .get<string>('diagnosticLevel', 'standard') as LintLevel;
     }
 
-    /** 获取 .f 文件路径配置 */
+    /** Get the configured .f file path */
     private getFFilePath(): string {
         return vscode.workspace.getConfiguration('innovus-tcl')
             .get<string>('fFile', 'tcl.f');
     }
 
-    /** 检查是否启用跨文件编译分析 */
+    /** Check whether cross-file compilation analysis is enabled */
     private isCompilationEnabled(): boolean {
         return vscode.workspace.getConfiguration('innovus-tcl')
             .get<boolean>('enableCompilation', true);
     }
 
     /**
-     * 对整个项目进行 Lint 分析。
-     * 需要工作区已经打开。
+     * Run the lint analysis over the whole project.
+     * Requires an open workspace.
      */
     runLint(document?: vscode.TextDocument): void {
         if (!this.isCompilationEnabled()) {
@@ -105,13 +95,13 @@ export class TclLintProvider {
         const fFile = this.getFFilePath();
         const level = this.getLevel();
 
-        // 编译项目
+        // Compile the project
         this.lastResult = this.compiler.compile(this.workspaceRoot, fFile);
 
-        // 生成诊断信息
+        // Build the diagnostics
         const allDiagnostics = new Map<string, vscode.Diagnostic[]>();
 
-        // 收集每个文件的诊断
+        // Collect the diagnostics for every file
         for (const error of this.lastResult.errors) {
             this.addDiagnostic(allDiagnostics, error.filePath,
                 this.createDiagnostic(error, vscode.DiagnosticSeverity.Error));
@@ -124,13 +114,13 @@ export class TclLintProvider {
             }
         }
 
-        // strict 级别：检查未使用的变量
+        // strict level: check for unused variables
         if (level === 'strict') {
             this.checkUnusedVariables(allDiagnostics);
             this.checkUnusedProcs(allDiagnostics);
         }
 
-        // 应用诊断到所有文件
+        // Apply the diagnostics to every file
         this.diagnosticCollection.clear();
 
         for (const [filePath, diagnostics] of allDiagnostics) {
@@ -138,7 +128,7 @@ export class TclLintProvider {
             this.diagnosticCollection.set(uri, diagnostics);
         }
 
-        // 如果指定了 document，确保该文件的诊断也被更新
+        // When a document was given, make sure its diagnostics are updated too
         if (document) {
             const existing = allDiagnostics.get(document.uri.fsPath) || [];
             this.diagnosticCollection.set(document.uri, existing);
@@ -146,7 +136,7 @@ export class TclLintProvider {
     }
 
     /**
-     * 增量 Lint：单个文件保存时触发。
+     * Incremental lint: triggered when a single file is saved.
      */
     runIncrementalLint(document: vscode.TextDocument): void {
         if (!this.isCompilationEnabled() || !this.lastResult) {
@@ -157,10 +147,10 @@ export class TclLintProvider {
         const content = document.getText();
         const filePath = document.uri.fsPath;
 
-        // 增量更新编译结果
+        // Update the compilation result incrementally
         this.lastResult = this.compiler.incrementalUpdate(filePath, content, this.lastResult);
 
-        // 重新生成此文件的诊断
+        // Regenerate the diagnostics for this file
         const diagnostics: vscode.Diagnostic[] = [];
 
         for (const error of this.lastResult.errors) {
@@ -178,7 +168,7 @@ export class TclLintProvider {
         this.diagnosticCollection.set(document.uri, diagnostics);
     }
 
-    /** 清除所有诊断 */
+    /** Clear every diagnostic */
     clear(): void {
         this.diagnosticCollection.clear();
         this.lastResult = null;
@@ -189,7 +179,7 @@ export class TclLintProvider {
     }
 
     // ════════════════════════════════════════════════════════
-    //  私有辅助方法
+    //  Private helpers
     // ════════════════════════════════════════════════════════
 
     private addDiagnostic(
@@ -218,22 +208,19 @@ export class TclLintProvider {
         return diag;
     }
 
-    /** 检查未使用的变量 */
+    /** Check for unused variables */
     private checkUnusedVariables(diagnosticsMap: Map<string, vscode.Diagnostic[]>): void {
         if (!this.lastResult) { return; }
-        const isZh = resolveLintLanguage() === 'zh';
 
         for (const [varName, defs] of this.lastResult.variables) {
-            // 检查每个定义是否有对应的引用
+            // Check whether every definition has a matching reference
             const refs = this.lastResult.variableRefs.filter(r => r.name === varName);
             if (refs.length === 0 && defs.length > 0) {
                 const lastDef = defs[defs.length - 1];
                 const diag = new vscode.Diagnostic(
                     new vscode.Range(lastDef.line - 1, lastDef.column - 1,
                         lastDef.line - 1, lastDef.column + lastDef.name.length),
-                    isZh
-                        ? `变量 "${varName}" 已定义但从未使用`
-                        : `Variable "${varName}" is defined but never used`,
+                    t('diag.unusedVariable', varName),
                     vscode.DiagnosticSeverity.Information
                 );
                 diag.source = DIAGNOSTIC_SOURCE;
@@ -242,10 +229,9 @@ export class TclLintProvider {
         }
     }
 
-    /** 检查未使用的 proc */
+    /** Check for unused procs */
     private checkUnusedProcs(diagnosticsMap: Map<string, vscode.Diagnostic[]>): void {
         if (!this.lastResult) { return; }
-        const isZh = resolveLintLanguage() === 'zh';
 
         const allCommandNames = new Set<string>();
         for (const unit of this.lastResult.units) {
@@ -260,9 +246,7 @@ export class TclLintProvider {
                     const diag = new vscode.Diagnostic(
                         new vscode.Range(proc.line - 1, proc.column - 1,
                             proc.line - 1, proc.column + proc.procName.length + 4),
-                        isZh
-                            ? `过程 "${proc.procName}" 已定义但从未被调用`
-                            : `Procedure "${proc.procName}" is defined but never called`,
+                        t('diag.unusedProc', proc.procName),
                         vscode.DiagnosticSeverity.Information
                     );
                     diag.source = DIAGNOSTIC_SOURCE;
@@ -273,18 +257,17 @@ export class TclLintProvider {
     }
 
     // ════════════════════════════════════════════════════════
-    //  MCP 接口：Lint 报告
+    //  MCP interface: lint report
     // ════════════════════════════════════════════════════════
 
     /**
-     * 生成 Lint 报告（用于 MCP 工具返回）。
-     * @param format 输出格式 "text" | "json"
+     * Generate the lint report (returned by the MCP tools).
+     * @param format output format, "text" | "json"
      */
     generateLintReport(format: 'text' | 'json' = 'text'): string {
         if (!this.lastResult) {
-            const isZh = resolveLintLanguage() === 'zh';
             return JSON.stringify({
-                error: isZh ? '没有编译结果。请先运行 Lint 分析。' : 'No compilation result. Run Lint analysis first.'
+                error: t('report.noResult')
             });
         }
 
@@ -296,56 +279,49 @@ export class TclLintProvider {
 
     private generateTextReport(): string {
         const r = this.lastResult!;
-        const isZh = resolveLintLanguage() === 'zh';
         const lines: string[] = [];
 
-        lines.push(isZh ? `# Innovus TCL Lint 报告` : `# Innovus TCL Lint Report`);
+        lines.push(t('report.title'));
         lines.push(``);
-        lines.push(isZh ? `**工作区**: ${r.workspaceRoot}` : `**Workspace**: ${r.workspaceRoot}`);
-        lines.push(isZh ? `**编译文件**: ${r.fFilePath}` : `**Compilation file**: ${r.fFilePath}`);
-        lines.push(isZh ? `**文件数量**: ${r.units.length}` : `**Files**: ${r.units.length}`);
-        lines.push(isZh
-            ? `**变量定义数**: ${Array.from(r.variables.values()).reduce((s, v) => s + v.length, 0)}`
-            : `**Variable defs**: ${Array.from(r.variables.values()).reduce((s, v) => s + v.length, 0)}`);
-        lines.push(isZh
-            ? `**变量引用数**: ${r.variableRefs.length}`
-            : `**Variable refs**: ${r.variableRefs.length}`);
-        lines.push(isZh ? `**错误数**: ${r.errors.length}` : `**Errors**: ${r.errors.length}`);
-        lines.push(isZh ? `**警告数**: ${r.warnings.length}` : `**Warnings**: ${r.warnings.length}`);
+        lines.push(t('report.workspace', r.workspaceRoot));
+        lines.push(t('report.fFile', r.fFilePath));
+        lines.push(t('report.files', r.units.length));
+        lines.push(t('report.varDefs', Array.from(r.variables.values()).reduce((s, v) => s + v.length, 0)));
+        lines.push(t('report.varRefs', r.variableRefs.length));
+        lines.push(t('report.errors', r.errors.length));
+        lines.push(t('report.warnings', r.warnings.length));
         lines.push(``);
 
-        // 编译顺序
-        lines.push(isZh ? `## 📋 编译文件列表` : `## 📋 Compilation File List`);
+        // Compilation order
+        lines.push(t('report.fileListHeading'));
         lines.push(``);
         for (const unit of r.units) {
-            lines.push(`- \`${unit.relativePath}\` (${unit.sets.length} ${isZh ? '个变量定义' : 'variable defs'})`);
+            lines.push(`- \`${unit.relativePath}\` (${t('report.varDefsSuffix', unit.sets.length)})`);
         }
         lines.push(``);
 
-        // 变量表
-        lines.push(isZh ? `## 📊 全局变量表` : `## 📊 Global Variable Table`);
+        // Variable table
+        lines.push(t('report.varTableHeading'));
         lines.push(``);
         if (r.variables.size === 0) {
-            lines.push(isZh ? `*(无变量定义)*` : `*(no variable definitions)*`);
+            lines.push(t('report.noVariables'));
         } else {
-            lines.push(isZh
-                ? `| 变量名 | 值 | 定义位置 |`
-                : `| Variable | Value | Defined at |`);
+            lines.push(t('report.varTableHeader'));
             lines.push(`|--------|-----|---------|`);
             for (const [varName, defs] of r.variables) {
                 for (const def of defs) {
                     const val = def.value.length > 40
                         ? def.value.substring(0, 37) + '...'
-                        : def.value || (isZh ? '*(空)*' : '*(empty)*');
+                        : def.value || t('report.emptyValue');
                     lines.push(`| \`${varName}\` | ${val} | ${def.relativePath}:${def.line} |`);
                 }
             }
         }
         lines.push(``);
 
-        // 错误
+        // Errors
         if (r.errors.length > 0) {
-            lines.push(isZh ? `## ❌ 错误 (${r.errors.length})` : `## ❌ Errors (${r.errors.length})`);
+            lines.push(t('report.errorsHeading', r.errors.length));
             lines.push(``);
             for (const err of r.errors) {
                 const relPath = path.relative(r.workspaceRoot, err.filePath);
@@ -354,9 +330,9 @@ export class TclLintProvider {
             lines.push(``);
         }
 
-        // 警告
+        // Warnings
         if (r.warnings.length > 0) {
-            lines.push(isZh ? `## ⚠️ 警告 (${r.warnings.length})` : `## ⚠️ Warnings (${r.warnings.length})`);
+            lines.push(t('report.warningsHeading', r.warnings.length));
             lines.push(``);
             for (const warn of r.warnings) {
                 const relPath = path.relative(r.workspaceRoot, warn.filePath);
@@ -366,11 +342,9 @@ export class TclLintProvider {
         }
 
         if (r.errors.length === 0 && r.warnings.length === 0) {
-            lines.push(isZh ? `## ✅ 无问题` : `## ✅ No Issues`);
+            lines.push(t('report.noIssuesHeading'));
             lines.push(``);
-            lines.push(isZh
-                ? `所有文件编译通过，未发现语法错误或未定义变量。`
-                : `All files compiled successfully. No syntax errors or undefined variables found.`);
+            lines.push(t('report.noIssuesBody'));
         }
 
         return lines.join('\n');
@@ -379,7 +353,7 @@ export class TclLintProvider {
     private generateJsonReport(): string {
         const r = this.lastResult!;
 
-        // 构建可序列化的报告
+        // Build the serializable report
         const report: any = {
             workspaceRoot: r.workspaceRoot,
             fFilePath: r.fFilePath,
@@ -427,7 +401,7 @@ export class TclLintProvider {
     }
 
     /**
-     * 查询变量信息（MCP 接口）。
+     * Look up variable information (MCP interface).
      */
     queryVariable(varName: string, filePath?: string, line?: number): {
         found: boolean;
@@ -440,7 +414,7 @@ export class TclLintProvider {
         }
 
         const r = this.lastResult;
-        // 将相对路径转换为绝对路径
+        // Turn a relative path into an absolute one
         let absPath = filePath;
         if (filePath && !path.isAbsolute(filePath)) {
             absPath = path.resolve(r.workspaceRoot, filePath);

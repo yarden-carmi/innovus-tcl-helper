@@ -1,9 +1,9 @@
 /**
- * 英文原始 help .log 文件解析器
+ * Parser for the raw English help .log files
  *
- * 解析 Innovus 原生的 "help <cmd>" 输出文本为 CmdInfo 结构
+ * Parses the native Innovus "help <cmd>" output text into a CmdInfo structure.
  *
- * 输入格式 (help_cmds/help_logs/help_<cmd>.log):
+ * Input format (help_cmds/help_logs/help_<cmd>.log):
  *   Usage: cmdName [-help] -arg1 <val1> [-arg2 <val2>]
  *                    [-arg3] ...
  *   -help          # Prints out the command usage
@@ -15,12 +15,12 @@
 import { CmdInfo, CmdOption } from './commands';
 
 /**
- * 解析英文 help .log 原始文本为 CmdInfo
+ * Parse the raw English help .log text into a CmdInfo
  */
 export function parseHelpLog(cmdName: string, content: string): CmdInfo {
     const lines = content.split('\n');
 
-    // 提取 Usage 行（可能跨多行）
+    // Extract the Usage line (it may span several lines)
     let usage = '';
     let optionLines: string[] = [];
     let inUsage = true;
@@ -28,14 +28,14 @@ export function parseHelpLog(cmdName: string, content: string): CmdInfo {
     for (const line of lines) {
         if (inUsage) {
             if (line.startsWith('Usage:') || line.match(/^\s{15,}[-\[]/)) {
-                // Usage 第一行或续行（缩进15+空格后以 - 或 [ 开头）
+                // First Usage line or a continuation (15+ spaces of indent followed by - or [)
                 usage += (usage ? ' ' : '') + line.trim();
             } else if (line.trim().startsWith('-')) {
-                // 第一个 option 行，切换模式
+                // First option line, switch mode
                 inUsage = false;
                 optionLines.push(line);
             } else if (line.trim() === '') {
-                // 空行，可能切换
+                // Blank line, possibly a mode switch
                 inUsage = false;
             }
         } else {
@@ -45,10 +45,10 @@ export function parseHelpLog(cmdName: string, content: string): CmdInfo {
         }
     }
 
-    // 清理 Usage
+    // Clean up the Usage text
     usage = usage.replace(/^Usage:\s*/, '').trim();
 
-    // 解析选项参数
+    // Parse the options
     const options = parseOptions(optionLines);
     const description = `Adds, modifies, or queries design objects related to '${cmdName}'.`;
 
@@ -63,9 +63,9 @@ export function parseHelpLog(cmdName: string, content: string): CmdInfo {
 }
 
 /**
- * 解析选项行
+ * Parse the option lines
  *
- * 格式:
+ * Format:
  *   -flagName      # Description text (type, required/optional)
  *   -flagName <val># Description (type, required/optional)
  *   -flagName {v1 v2}  # Description (enum, optional)
@@ -76,10 +76,10 @@ function parseOptions(lines: string[]): CmdOption[] {
     let currentOption: { name: string; lines: string[] } | null = null;
 
     for (const line of lines) {
-        // 检查是否为新选项行：以 - 开头（前面可能有少量空白）
+        // A new option line starts with - (possibly after a little whitespace)
         const optionMatch = line.match(/^(\s*)(-\w+)\b/);
         if (optionMatch) {
-            // 保存前一个选项
+            // Flush the previous option
             if (currentOption) {
                 options.push(buildOption(currentOption.name, currentOption.lines));
             }
@@ -88,12 +88,12 @@ function parseOptions(lines: string[]): CmdOption[] {
                 lines: [line.trim()]
             };
         } else if (currentOption && line.trim()) {
-            // 续行
+            // Continuation line
             currentOption.lines.push(line.trim());
         }
     }
 
-    // 保存最后一个选项
+    // Flush the last option
     if (currentOption) {
         options.push(buildOption(currentOption.name, currentOption.lines));
     }
@@ -102,22 +102,22 @@ function parseOptions(lines: string[]): CmdOption[] {
 }
 
 /**
- * 从多行文本构建 CmdOption
+ * Build a CmdOption from multiple lines of text
  */
 function buildOption(name: string, lines: string[]): CmdOption {
-    // 处理续行中的 # 注释前缀：将每行开头的 # 替换为空格
+    // Handle the # comment prefix on continuation lines: replace the leading # with a space
     const cleanedLines = lines.map((line, idx) => {
-        if (idx === 0) { return line; } // 第一行保持原样（flag name 行）
-        // 续行：去掉开头的空白和 #
+        if (idx === 0) { return line; } // Keep the first line as-is (the flag name line)
+        // Continuation line: strip the leading whitespace and #
         return line.replace(/^\s*#\s*/, ' ').trim();
     });
 
-    // 合并描述行
+    // Merge the description lines
     let fullText = cleanedLines.join(' ');
 
-    // 移除开头的 flag 名称和可能的 value placeholder
-    // 例如: "-cell <cellName>     # Name of cell (string, required)"
-    // 保留 # 后面的描述部分
+    // Strip the leading flag name and any value placeholder,
+    // e.g. "-cell <cellName>     # Name of cell (string, required)"
+    // keeping only the description after the #
     const hashIdx = fullText.indexOf('#');
     let description = '';
     let type = 'flag';
@@ -129,32 +129,32 @@ function buildOption(name: string, lines: string[]): CmdOption {
         description = fullText.substring(name.length).trim();
     }
 
-    // 从描述中提取类型和必需性
-    // 格式: "... (type, required/optional)"
+    // Extract the type and whether the option is required from the description,
+    // in the format: "... (type, required/optional)"
     const typeMatch = description.match(/\(([^)]+)\)\s*$/);
     if (typeMatch) {
         const typeStr = typeMatch[1].toLowerCase();
         description = description.substring(0, description.lastIndexOf('(')).trim();
 
-        // 解析类型
+        // Parse the type
         if (typeStr.includes('string')) { type = 'string'; }
         else if (typeStr.includes('bool')) { type = 'flag'; }
         else if (typeStr.includes('enum')) { type = 'enum'; }
         else if (typeStr.includes('int')) { type = 'int'; }
         else if (typeStr.includes('float')) { type = 'float'; }
         else if (typeStr.includes('point') || typeStr.includes('box')) { type = 'point'; }
-        // 若 name 后有 <...> 或 {...} 且 type 尚为 flag → 修正
+        // If the name is followed by <...> or {...} and the type is still flag → correct it
         else if (lines[0] && /[<{]/.test(lines[0])) { type = 'string'; }
 
-        // 解析必需性
+        // Parse whether the option is required
         required = typeStr.includes('required');
     }
 
-    // 清理 description 中的多余空白
+    // Collapse redundant whitespace in the description
     description = description.replace(/\s+/g, ' ').trim();
 
-    // 如果 name 带 value placeholder 且 type 不是 flag, 调整 type
-    // e.g. "-cell <cellName>" → type 应该是 string
+    // If the name carries a value placeholder and the type is not a flag, adjust the type,
+    // e.g. "-cell <cellName>" → the type should be string
     if (lines[0] && lines[0].includes('<') && type === 'flag') {
         type = 'string';
     }

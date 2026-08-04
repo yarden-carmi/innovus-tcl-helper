@@ -1,219 +1,220 @@
-# 构建、测试与发布指南
+# Build, test and release guide
 
-## 项目结构概览
+## Project layout
 
 ```
-vscode-plugins/                    ← Git 仓库根目录 ✅
-├── .gitignore                     # 忽略 node_modules, out/, data/, *.vsix
-├── data_base/                     # ✅ 开源数据，Git 管理
+vscode-plugins/                    ← Git repository root ✅
+├── .gitignore                     # ignores node_modules, out/, data/, *.vsix
+├── data_base/                     # ✅ open data, tracked in Git
 │   ├── all_cmds.json
-│   ├── cn/help/  (2175 JSON)     # 中文命令文档
+│   ├── cn/help/  (2175 JSON)      # Chinese command documentation
 │   ├── cn/man/   (2178 JSON)
-│   ├── en/help/  (2192 JSON)     # 英文命令文档
+│   ├── en/help/  (2192 JSON)      # English command documentation
 │   ├── en/man/   (2192 JSON)
-│   ├── en/ori_logs/help_logs/    # 原始英文 .log（源数据）
+│   ├── en/ori_logs/help_logs/     # the raw English .log files (source data)
 │   └── sort_cmds_jsons/
 │
-└── innovus-tcl-helper/            ← VS Code 扩展
+└── innovus-tcl-helper/            ← the VS Code extension
     ├── package.json
     ├── tsconfig.json
-    ├── .vscodeignore              # VSIX 打包排除规则
+    ├── .vscodeignore              # VSIX packaging exclusions
     ├── .vscode/
-    │   ├── launch.json            # F5 调试配置 ✅
-    │   └── tasks.json             # 编译任务 ✅
-    ├── src/                       # TypeScript 源码
+    │   ├── launch.json            # F5 debug configuration ✅
+    │   └── tasks.json             # build tasks ✅
+    ├── src/                       # TypeScript sources
     ├── scripts/
-    │   ├── prepublish.mjs         # 打包前复制 data_base → data/
-    │   └── generate_en_help.mjs   # 英文 .log → JSON 生成器
-    ├── docs/                      # 用户文档（随 VSIX 发布）
-    └── dev/                       # 开发文档（不发布）
+    │   ├── prepublish.mjs         # copies data_base → data/ before packaging
+    │   └── generate_en_help.mjs   # English .log → JSON generator
+    ├── docs/                      # user documentation (shipped in the VSIX)
+    └── dev/                       # developer documentation (not shipped)
 ```
 
-## 一、直接在项目中开发/调试
+## 1. Developing and debugging in place
 
-### 1.1 打开项目
+### 1.1 Open the project
 
-用 VS Code 打开 **`vscode-plugins/`**（仓库根目录）或 **`innovus-tcl-helper/`** 均可。
+Open either **`vscode-plugins/`** (the repository root) or **`innovus-tcl-helper/`** in VS Code.
 
-> 推荐打开 `vscode-plugins/`，这样可以同时查看 data_base 和扩展源码。
+> Opening `vscode-plugins/` is recommended: you see both data_base and the extension source.
 
-### 1.2 安装依赖
+### 1.2 Install the dependencies
 
 ```bash
 cd innovus-tcl-helper
 npm install
 ```
 
-### 1.3 编译
+### 1.3 Compile
 
 ```bash
-npm run compile      # 一次性编译
-# 或
-npm run watch        # 监视模式，改代码自动编译
+npm run compile      # one-off build
+# or
+npm run watch        # watch mode, rebuilds on every change
 ```
 
-### 1.4 启动调试（F5）
+### 1.4 Start debugging (F5)
 
-1. 在 VS Code 中打开 `innovus-tcl-helper/` 文件夹
-2. 按 **`F5`**（自动编译 + 启动 Extension Development Host）
-3. 弹出的新窗口中，打开任意 `.tcl` 文件
-4. 在源码中设断点，调试各项功能
+1. Open the `innovus-tcl-helper/` folder in VS Code
+2. Press **`F5`** (compiles, then launches the Extension Development Host)
+3. Open any `.tcl` file in the new window
+4. Set breakpoints in the source and step through the features
 
-> `.vscode/launch.json` 和 `.vscode/tasks.json` 已配置好，开箱即用。
+> `.vscode/launch.json` and `.vscode/tasks.json` are already configured — nothing to set up.
 
-### 1.5 数据路径说明
+### 1.5 Data paths
 
-| 场景 | data_base 位置 | commands.ts 自动查找 |
-|------|---------------|---------------------|
-| 开发调试 | `vscode-plugins/data_base/` | `extensionPath/../data_base/` ✅ |
-| VSIX 安装后 | 内置 `data/` | `extensionPath/data/` ✅ |
-| 自定义路径 | 用户指定 | `innovus-tcl.dataRoot` 配置 |
+| Scenario | data_base location | What commands.ts finds |
+|----------|--------------------|------------------------|
+| Development | `vscode-plugins/data_base/` | `extensionPath/../data_base/` ✅ |
+| Installed from a VSIX | the bundled `data/` | `extensionPath/data/` ✅ |
+| Custom path | wherever you point it | the `innovus-tcl.dataRoot` setting |
 
-## 二、测试清单
+## 2. Test checklist
 
-在 Extension Development Host 中打开 `.tcl` 文件，逐一验证：
+Open a `.tcl` file in the Extension Development Host and verify each item:
 
-| # | 测试项 | 操作 | 预期 |
-|---|--------|------|------|
-| 1 | 命令名补全 | 输入 `addI` | 弹出 `addInst` 等补全列表 |
-| 2 | 参数补全 | 输入 `addInst -` | 弹出 `-cell`、`-inst` 等参数 |
-| 3 | 悬停提示（中文） | 鼠标悬浮 `addInst` | 显示中文 Markdown 文档 |
-| 4 | 切换英文 | 设置 `innovus-tcl.language` = `en` | 悬停变为英文 |
-| 5 | 括号错误 | 输入 `set x [expr {1]]` | 保存后标红 "多余的 ]" |
-| 6 | 引号错误 | 输入 `puts "hello` | 保存后标红 "未闭合引号" |
-| 7 | 缺少参数 | 只输入 `addInst` | 保存后标黄 "缺少必需参数" |
+| # | Test | Action | Expected |
+|---|------|--------|----------|
+| 1 | Command completion | Type `addI` | `addInst` and friends appear |
+| 2 | Option completion | Type `addInst -` | `-cell`, `-inst` and the other options appear |
+| 3 | Hover documentation | Hover `addInst` | The Markdown documentation appears |
+| 4 | Chinese documentation | Set `innovus-tcl.language` = `zh` | The hover text switches to Chinese |
+| 5 | Bracket error | Type `set x [expr {1]]` | On save, "Extra "]"" is flagged |
+| 6 | Quote error | Type `puts "hello` | On save, "Unclosed double quote" is flagged |
+| 7 | Missing argument | Type `addInst` alone | On save, "Missing required option" is warned |
 
-## 三、打包 VSIX
+## 3. Packaging a VSIX
 
-### 3.1 安装打包工具
+### 3.1 Install the packaging tool
 
 ```bash
 npm install -g @vscode/vsce
 ```
 
-### 3.2 一键打包
+### 3.2 One-command package
 
 ```bash
 cd innovus-tcl-helper
 npm run package
 ```
 
-这条命令会自动：
-1. 运行 `scripts/prepublish.mjs` → 从 `../data_base/` 复制 JSON 到 `data/`
-2. 运行 `tsc -p ./` → 编译 TypeScript
-3. 运行 `vsce package` → 生成 `.vsix`
+That command:
+1. Runs `scripts/prepublish.mjs` → copies the JSON from `../data_base/` into `data/`
+2. Runs `tsc -p ./` → compiles the TypeScript
+3. Runs `vsce package` → produces the `.vsix`
 
-输出：`innovus-tcl-helper-0.1.0.vsix`
+Output: `innovus-tcl-helper-0.1.0.vsix`
 
-### 3.3 VSIX 内包含什么
+### 3.3 What the VSIX contains
 
 ```
 innovus-tcl-helper-0.1.0.vsix
 ├── extension/
 │   ├── package.json
-│   ├── out/                     # 编译后的 JS
-│   ├── data/                    # 内置命令数据 (cn/help/ + en/help/)
-│   │   ├── cn/help/*.json       # 中文
-│   │   └── en/help/*.json       # 英文
+│   ├── out/                     # the compiled JS
+│   ├── data/                    # the bundled command data (cn/help/ + en/help/)
+│   │   ├── cn/help/*.json       # Chinese
+│   │   └── en/help/*.json       # English
 │   └── docs/                    # README, CHANGELOG
 ```
 
-> **不包含**：`src/`、`dev/`、`test/`、`scripts/`、`node_modules/`、原始 `.log` 文件
+> **Not included**: `src/`, `dev/`, `test/`, `scripts/`, `node_modules/` and the raw `.log` files
 
-### 3.4 安装 VSIX
+### 3.4 Install the VSIX
 
 ```bash
 code --install-extension innovus-tcl-helper-0.1.0.vsix
 ```
 
-或在 VS Code 中：`Cmd+Shift+P` → `Extensions: Install from VSIX...`
+Or inside VS Code: `Cmd+Shift+P` → `Extensions: Install from VSIX...`
 
-## 四、发布到 VS Code Marketplace
+## 4. Publishing to the VS Code Marketplace
 
-### 4.1 创建发布者账号
+### 4.1 Create a publisher account
 
-1. 访问 https://marketplace.visualstudio.com/manage
-2. 用 Microsoft 账号登录
-3. 创建 publisher（如 `echoro`）
+1. Go to https://marketplace.visualstudio.com/manage
+2. Sign in with a Microsoft account
+3. Create a publisher (e.g. `echoro`)
 
-### 4.2 获取 Personal Access Token
+### 4.2 Get a Personal Access Token
 
-1. https://dev.azure.com → 你的组织 → User Settings → Personal Access Tokens
-2. 创建 token，权限勾选 **Marketplace (publish)**
-3. 复制 token
+1. https://dev.azure.com → your organization → User Settings → Personal Access Tokens
+2. Create a token with the **Marketplace (publish)** scope
+3. Copy the token
 
-### 4.3 发布
+### 4.3 Publish
 
 ```bash
 cd innovus-tcl-helper
 
-# 登录
+# Log in
 vsce login echoro
 
-# 发布（补丁版本号自动 +1）
+# Publish (bumps the patch version automatically)
 vsce publish patch
 
-# 或指定版本
+# Or pin the version
 vsce publish 0.1.0
 ```
 
-## 五、Git 管理
+## 5. Git
 
-### 5.1 当前仓库结构
+### 5.1 Repository layout
 
 ```
-vscode-plugins/          ← Git 仓库
-├── .gitignore           # 排除 node_modules, out/, data/, *.vsix
-├── data_base/           # ✅ 纳入版本管理（开源数据）
-└── innovus-tcl-helper/  # ✅ 纳入版本管理（插件源码）
+vscode-plugins/          ← the Git repository
+├── .gitignore           # excludes node_modules, out/, data/, *.vsix
+├── data_base/           # ✅ tracked (the open data)
+└── innovus-tcl-helper/  # ✅ tracked (the extension source)
 ```
 
-### 5.2 Git 工作流
+### 5.2 Workflow
 
 ```bash
-# 开发新功能
+# Start a feature
 git checkout -b feature/xxx
-# ... 修改代码 ...
+# ... edit ...
 git add -A && git commit -m "feat: xxx"
 
-# 发布前
-npm run compile          # 确保编译通过
-git tag v0.1.0           # 打版本标签
+# Before a release
+npm run compile          # make sure it builds
+git tag v0.1.0           # tag the version
 git push origin main --tags
 ```
 
-### 5.3 data_base 是否需要同步发布？
+### 5.3 Does data_base need to be released separately?
 
-**不需要单独发布 data_base。** VSIX 打包时 `prepublish.mjs` 会自动将所需 JSON 复制到扩展内，最终用户只需安装 `.vsix` 即可。
+**No.** `prepublish.mjs` copies the required JSON into the extension while the VSIX is
+built, so end users only ever install the `.vsix`.
 
-data_base 保留在 Git 仓库中的好处：
-- 开源可见，他人可审核命令数据质量
-- 英文 .log 是生成的源数据，新版 Innovus 可重新导出
-- 方便社区贡献（修正翻译、补充命令等）
+Keeping data_base in Git is still worthwhile:
+- It is open to inspection, so the quality of the command data can be reviewed
+- The English `.log` files are the source data and can be re-exported for a new Innovus release
+- It makes community contributions (translation fixes, extra commands, ...) easy
 
-## 六、更新数据
+## 6. Updating the data
 
-当 Innovus 版本升级时：
+When Innovus is upgraded:
 
 ```bash
-# 1. 导出新版 help 输出
-# (在 Innovus 中批量执行 help <cmd>，保存到 en/ori_logs/help_logs/)
+# 1. Export the help output of the new release
+#    (batch-run help <cmd> in Innovus and save into en/ori_logs/help_logs/)
 
-# 2. 重新生成英文 JSON
+# 2. Regenerate the English JSON
 node scripts/generate_en_help.mjs
 
-# 3. 如果要更新中文翻译，用 DeepSeek 等大模型重新处理
+# 3. To refresh the Chinese translation, re-run DeepSeek (or another model) over it
 
-# 4. 重新打包
+# 4. Repackage
 npm run package
 ```
 
-## 七、NPM Scripts 速查
+## 7. NPM script reference
 
-| Script | 用途 |
-|--------|------|
-| `npm run compile` | 编译 TypeScript → `out/` |
-| `npm run watch` | 监视编译 |
-| `npm run prepublish` | 复制 data_base JSON → `data/` |
+| Script | Purpose |
+|--------|---------|
+| `npm run compile` | Compile TypeScript → `out/` |
+| `npm run watch` | Compile in watch mode |
+| `npm run prepublish` | Copy the data_base JSON → `data/` |
 | `npm run package` | prepublish + compile + vsce package |
-| `npm run lint` | ESLint 检查 |
+| `npm run lint` | Run ESLint |

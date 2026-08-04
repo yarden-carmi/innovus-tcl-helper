@@ -1,29 +1,30 @@
-# 数据来源与处理流程
+# Data sources and processing
 
-## 数据源头
+## Where the data comes from
 
-Innovus 命令文档的原始数据来自 Cadence Innovus 工具自带的帮助系统。
+The Innovus command documentation originates in the help system that ships with the
+Cadence Innovus tool.
 
-### 三层数据
+### Three layers
 
 ```
 data_base/
 ├── innovus_cmd_db/
-│   ├── all_cmds.json           # 全部命令名列表（去重后的汇总）
-│   ├── help_cmds/help_logs/    # help <cmd> 的原始输出（简要用法）
-│   ├── man_cmds/man_logs/      # man <cmd> 的原始输出（详细手册）
-│   └── sort_cmds_jsons/        # 按首字母分组的命令名 JSON
+│   ├── all_cmds.json           # every command name (a deduplicated roll-up)
+│   ├── help_cmds/help_logs/    # the raw output of help <cmd> (brief usage)
+│   ├── man_cmds/man_logs/      # the raw output of man <cmd> (the full manual)
+│   └── sort_cmds_jsons/        # command names grouped by first letter, as JSON
 │
-├── help/deepseek-chat/         # ★ 插件使用的数据 ★
-│   └── help_<cmd>.json         # DeepSeek 结构化后的中文命令文档
+├── help/deepseek-chat/         # ★ what the extension actually loads ★
+│   └── help_<cmd>.json         # the command documentation, structured by DeepSeek
 │
-└── man/deepseek-chat/          # 结构化后的详细手册（备用，当前未使用）
+└── man/deepseek-chat/          # the structured full manual (spare, unused today)
     └── env_PAGER=cat_man_<cmd>.json
 ```
 
-### 原始数据格式
+### Raw data format
 
-**help 原始输出** (`help_addInst.log`)：
+**Raw help output** (`help_addInst.log`):
 ```
 Usage: addInst [-help] -cell <cellName> [-dontSnapToPlacementGrid]
                -inst <instName> [-loc {x y}] [-moduleBased <moduleName>]
@@ -35,7 +36,7 @@ Usage: addInst [-help] -cell <cellName> [-dontSnapToPlacementGrid]
 ...
 ```
 
-**man 原始输出** (`env_PAGER=cat_man_addInst.log`)：
+**Raw man output** (`env_PAGER=cat_man_addInst.log`):
 ```
 Product Version     25.10    Cadence Design Systems, Inc.
 addInst(25.10)
@@ -49,27 +50,27 @@ Syntax
        ...
 ```
 
-### DeepSeek 处理
+### The DeepSeek pass
 
-原始 help/man 文本经 DeepSeek 大模型结构化处理，输出 JSON：
+The raw help/man text is structured by the DeepSeek model into JSON:
 
 ```json
 {
   "command": "addInst",
   "is_cmd": true,
-  "summary": "添加一个实例到设计中",
-  "description": "该命令用于在设计中添加一个新的实例。可以指定实例的名称、所属的单元...",
+  "summary": "Adds an instance to the design",
+  "description": "Adds a new instance to the design. The instance name, its cell ...",
   "usage": "addInst [-help] -cell <cellName> ...",
   "options": [
     {
       "name": "-help",
-      "description": "打印命令用法",
+      "description": "Prints out the command usage",
       "required": false,
       "type": "flag"
     },
     {
       "name": "-cell",
-      "description": "单元名称",
+      "description": "Name of the cell",
       "required": true,
       "type": "string"
     }
@@ -78,23 +79,23 @@ Syntax
 }
 ```
 
-**处理内容**：
-- 原文翻译为中文
-- 提取命令名、用法语法
-- 参数结构化（名称、类型、是否必需、描述）
-- 生成一句话摘要
+**What the pass does**:
+- Translates the source text (for the `cn` data set)
+- Extracts the command name and the usage syntax
+- Structures the options (name, type, required, description)
+- Produces a one-line summary
 
-### 为何选择 help 而非 man
+### Why help rather than man
 
-| 维度 | help | man |
-|------|------|-----|
-| 内容 | 参数列表 + 简要说明 | 全文手册 |
-| JSON 大小 | ~1-2KB | ~5-20KB |
-| 悬停展示 | 简洁清晰，一目了然 | 过长，不适合 popup |
-| 加载速度 | 快（小文件） | 慢 |
-| 覆盖率 | 2175 条 | 约 2000+ 条 |
+| Dimension | help | man |
+|-----------|------|-----|
+| Content | Option list + brief description | The whole manual |
+| JSON size | ~1-2KB | ~5-20KB |
+| Hover display | Concise and readable at a glance | Too long for a popup |
+| Load speed | Fast (small files) | Slow |
+| Coverage | 2175 entries | Roughly 2000+ |
 
-## 数据加载流程
+## Load flow
 
 ```
 extension.ts: activate()
@@ -102,45 +103,45 @@ extension.ts: activate()
     ▼
 commands.ts: CommandDB.load()
     │
-    ├─ 检查 dataDir 是否存在
-    ├─ fs.readdirSync() 获取所有 .json 文件名
+    ├─ check that dataDir exists
+    ├─ fs.readdirSync() for every .json file name
     ├─ for each file:
-    │   ├─ fs.readFileSync() 读取文件内容
-    │   ├─ JSON.parse() 解析
+    │   ├─ fs.readFileSync() to read it
+    │   ├─ JSON.parse() to parse it
     │   └─ commands.set(cmdName, cmdInfo)
     │
-    └─ 设置 loaded = true
+    └─ set loaded = true
 ```
 
-### 路径解析
+### Path resolution
 
 ```
-插件目录: .../innovus-tcl-helper/
-数据目录: .../data_base/help/deepseek-chat/
+Extension directory: .../innovus-tcl-helper/
+Data directory:      .../data_base/help/deepseek-chat/
 
-相对路径: path.join(extensionPath, '..', 'data_base', 'help', 'deepseek-chat')
-                                  ↑
-                              回到 vscode-plugins/ 目录
+Relative path: path.join(extensionPath, '..', 'data_base', 'help', 'deepseek-chat')
+                                        ↑
+                                back up to vscode-plugins/
 ```
 
-### 加载性能
+### Load performance
 
-在 MacBook Pro (M-series) 上实测：
+Measured on a MacBook Pro (M-series):
 
-| 指标 | 数值 |
-|------|------|
-| JSON 文件数 | 2,175 |
-| 总数据量 | ~4.5MB |
-| 首次加载时间 | ~200ms（同步 I/O） |
-| 内存占用 | ~15MB（含 V8 堆） |
-| 命令查找 | O(1) Map.get() |
+| Metric | Value |
+|--------|-------|
+| JSON files | 2,175 |
+| Total data | ~4.5MB |
+| First load | ~200ms (synchronous I/O) |
+| Memory | ~15MB (including the V8 heap) |
+| Command lookup | O(1) Map.get() |
 
-## 数据更新流程
+## Updating the data
 
-当 Innovus 版本更新导致命令变化时：
+When an Innovus release changes the command set:
 
-1. 重新导出 `help <cmd>` 输出到 `help_cmds/help_logs/`
-2. 运行 DeepSeek 结构化脚本（用户自有）
-3. 输出新的 JSON 到 `help/deepseek-chat/`
-4. 在 VS Code 中执行 `Innovus TCL: 重新加载命令数据库`
-5. 或直接重启 VS Code
+1. Re-export the `help <cmd>` output into `help_cmds/help_logs/`
+2. Run your own DeepSeek structuring script
+3. Write the new JSON into `help/deepseek-chat/`
+4. Run `Innovus TCL: Reload Command Database` in VS Code
+5. Or simply restart VS Code

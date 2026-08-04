@@ -1,19 +1,20 @@
 /**
- * Definition Provider — F12/Ctrl+Click 跳转到命令帮助 / 变量定义
+ * Definition Provider — F12/Ctrl+Click jumps to command help / variable definitions
  *
- * 支持两种跳转目标:
- *   - Innovus 命令名 → 命令帮助文档（Webview 或纯文本）
- *   - $varName 变量引用 → 变量定义位置（set / foreach / proc 参数）
+ * Two kinds of jump target are supported:
+ *   - Innovus command name → command help documentation (Webview or plain text)
+ *   - $varName reference   → variable definition site (set / foreach / proc argument)
  *
- * 帮助显示风格（通过 innovus-tcl.helpStyle 配置）:
- *   "webview" — Webview 富文本面板（教育化排版）
- *   "plain"   — 虚拟纯文本文档（类 man page）
+ * Help display style (configured through innovus-tcl.helpStyle):
+ *   "webview" — Webview rich panel (tutorial-style layout)
+ *   "plain"   — virtual plain text document (man page style)
  */
 
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { getDB, CmdInfo, CmdOption } from './commands';
 import { TclLintProvider } from './lint';
+import { t, isZhUi } from './i18n';
 
 const HELP_SCHEME = 'innovus-tcl-help';
 
@@ -25,7 +26,7 @@ function getHelpStyle(): HelpStyle {
 }
 
 // ════════════════════════════════════════════════════════════════
-//  Plain Text 模式（TextDocumentContentProvider）
+//  Plain text mode (TextDocumentContentProvider)
 // ════════════════════════════════════════════════════════════════
 
 export class InnovusPlainHelpProvider implements vscode.TextDocumentContentProvider {
@@ -42,8 +43,6 @@ export class InnovusPlainHelpProvider implements vscode.TextDocumentContentProvi
 }
 
 function formatPlain(info: CmdInfo): string {
-    const db = getDB();
-    const isZh = db.getLanguage() === 'zh';
     const lines: string[] = [];
     const sep = '═'.repeat(72);
 
@@ -53,38 +52,36 @@ function formatPlain(info: CmdInfo): string {
     lines.push(sep);
     lines.push('');
 
-    lines.push(isZh ? '▎语法' : '▎SYNOPSIS');
+    lines.push(t('help.synopsis'));
     lines.push('  ' + (info.usage || info.command));
     lines.push('');
 
     if (info.description && info.description !== info.summary) {
-        lines.push(isZh ? '▎说明' : '▎DESCRIPTION');
+        lines.push(t('help.descriptionHeading'));
         for (const w of wrapText(info.description, 68)) { lines.push('  ' + w); }
         lines.push('');
     }
 
     if (info.options && info.options.length > 0) {
-        lines.push(isZh ? '▎参数' : '▎OPTIONS');
+        lines.push(t('help.optionsHeading'));
         lines.push('');
         for (const opt of info.options) {
-            const req = opt.required
-                ? (isZh ? ' [必需]' : ' [Required]')
-                : (isZh ? ' [可选]' : ' [Optional]');
+            const req = opt.required ? ` [${t('common.required')}]` : ` [${t('common.optional')}]`;
             lines.push(`  ${opt.name}${req}`);
-            lines.push(`      类型: ${opt.type}`);
+            lines.push(`      ${t('common.type')}: ${opt.type}`);
             for (const w of wrapText(opt.description, 64)) { lines.push('      ' + w); }
             lines.push('');
         }
     }
 
     lines.push('─'.repeat(72));
-    lines.push(isZh ? '  Innovus TCL Helper — 纯文本模式' : '  Innovus TCL Helper — Plain Text Mode');
+    lines.push(t('help.plainFooter'));
 
     return lines.join('\n');
 }
 
 // ════════════════════════════════════════════════════════════════
-//  Webview 模式（富文本教育面板）
+//  Webview mode (rich tutorial-style panel)
 // ════════════════════════════════════════════════════════════════
 
 class HelpPanelManager {
@@ -92,13 +89,12 @@ class HelpPanelManager {
 
     static show(context: vscode.ExtensionContext, info: CmdInfo): void {
         const db = getDB();
-        const isZh = db.getLanguage() === 'zh';
-        const title = `${info.command} — ${isZh ? '帮助' : 'Help'}`;
+        const title = `${info.command} — ${t('help.title')}`;
 
-        // 查找相关命令
+        // Look up related commands
         const related = findRelatedCommands(info.command, db);
 
-        const html = buildHtml(info, isZh, related);
+        const html = buildHtml(info, related);
 
         if (this.currentPanel) {
             this.currentPanel.title = title;
@@ -119,12 +115,12 @@ class HelpPanelManager {
     }
 }
 
-/** 查找前缀相似的相关命令（最多 8 个） */
+/** Find related commands sharing a prefix (at most 8) */
 function findRelatedCommands(cmdName: string, db: ReturnType<typeof getDB>): CmdInfo[] {
     const parts = cmdName.split('_');
     if (parts.length < 2) { return []; }
 
-    // 取前两个前缀段作为关键词
+    // Use the first two prefix segments as the keyword
     const prefix = parts.slice(0, 2).join('_');
     const allNames = db.getCommandNames();
     const related: CmdInfo[] = [];
@@ -142,8 +138,8 @@ function findRelatedCommands(cmdName: string, db: ReturnType<typeof getDB>): Cmd
     return related;
 }
 
-/** 生成参数分析文本（中英文） */
-function analyzeOptions(options: CmdOption[], isZh: boolean): string {
+/** Build the option analysis text */
+function analyzeOptions(options: CmdOption[]): string {
     if (!options || options.length === 0) { return ''; }
 
     const required = options.filter(o => o.required);
@@ -155,85 +151,77 @@ function analyzeOptions(options: CmdOption[], isZh: boolean): string {
 
     if (required.length > 0) {
         const names = required.map(o => `<code>${escapeHtml(o.name)}</code>`).join(', ');
-        parts.push(isZh
-            ? `⚠️ 该命令有 <strong>${required.length} 个必需参数</strong>：${names}。执行前请确保已提供这些参数。`
-            : `⚠️ This command has <strong>${required.length} required parameter(s)</strong>: ${names}. Make sure to provide them before execution.`);
+        parts.push(t('help.analysisRequired', required.length, names));
     } else {
-        parts.push(isZh
-            ? `✅ 所有参数均为可选，可直接执行 <code>${escapeHtml(options[0]?.name ? '' : '')}</code>。`
-            : `✅ All parameters are optional.`);
+        parts.push(t('help.analysisAllOptional'));
     }
 
     if (flags.length > 0 && valued.length > 0) {
-        parts.push(isZh
-            ? `💡 ${flags.length} 个开关参数（无需值）+ ${valued.length} 个赋值参数（需指定值）。`
-            : `💡 ${flags.length} flag(s) (no value) + ${valued.length} value parameter(s) (needs value).`);
+        parts.push(t('help.analysisFlags', flags.length, valued.length));
     }
 
     if (enumOpts.length > 0) {
         const names = enumOpts.map(o => `<code>${escapeHtml(o.name)}</code>`).join(', ');
-        parts.push(isZh
-            ? `🔢 ${names} 为枚举类型，有预设的可选值。`
-            : `🔢 ${names} are enum types with preset choices.`);
+        parts.push(t('help.analysisEnums', names));
     }
 
     return parts.map(p => `<p class="analysis-item">${p}</p>`).join('\n');
 }
 
-// ---- HTML 模板 ----
+// ---- HTML template ----
 
-function buildHtml(info: CmdInfo, isZh: boolean, related: CmdInfo[]): string {
-    const analysis = analyzeOptions(info.options, isZh);
+function buildHtml(info: CmdInfo, related: CmdInfo[]): string {
+    const analysis = analyzeOptions(info.options);
 
     return `<!DOCTYPE html>
-<html lang="${isZh ? 'zh-CN' : 'en'}">
+<html lang="${isZhUi() ? 'zh-CN' : 'en'}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${escapeHtml(info.command)} — ${isZh ? '帮助' : 'Help'}</title>
+<title>${escapeHtml(info.command)} — ${t('help.title')}</title>
 <style>${styles}</style>
 </head>
 <body>
 
-<!-- 标题区 -->
+<!-- Header -->
 <div class="header">
     <h1><code>${escapeHtml(info.command)}</code></h1>
-    <span class="badge">${info.is_cmd !== false ? (isZh ? '命令' : 'Command') : (isZh ? '模式/变量' : 'Mode/Variable')}</span>
+    <span class="badge">${info.is_cmd !== false ? t('common.command') : t('common.variableMode')}</span>
     ${info.summary ? `<p class="summary">${escapeHtml(info.summary)}</p>` : ''}
 </div>
 
-<!-- 参数分析卡片 -->
+<!-- Parameter analysis card -->
 ${analysis ? `
 <div class="card analysis">
-    <div class="card-title">${isZh ? '📊 参数分析' : '📊 Parameter Analysis'}</div>
+    <div class="card-title">${t('help.analysisCard')}</div>
     ${analysis}
 </div>` : ''}
 
-<!-- 语法 -->
+<!-- Synopsis -->
 ${info.usage ? `
 <div class="section">
-    <h2>${isZh ? '▎语法' : '▎SYNOPSIS'}</h2>
+    <h2>${t('help.synopsis')}</h2>
     <pre class="usage"><code>${escapeHtml(info.usage)}</code></pre>
 </div>` : ''}
 
-<!-- 说明 -->
+<!-- Description -->
 ${(info.description && info.description !== info.summary) ? `
 <div class="section">
-    <h2>${isZh ? '▎说明' : '▎DESCRIPTION'}</h2>
+    <h2>${t('help.descriptionHeading')}</h2>
     <p class="desc">${escapeHtml(info.description)}</p>
 </div>` : ''}
 
-<!-- 参数表 -->
+<!-- Option table -->
 ${(info.options && info.options.length > 0) ? `
 <div class="section">
-    <h2>${isZh ? '▎参数列表' : '▎OPTIONS'} <span class="count">(${info.options.length})</span></h2>
+    <h2>${t('help.optionListHeading')} <span class="count">(${info.options.length})</span></h2>
     <table class="opts">
         <thead>
             <tr>
-                <th>${isZh ? '参数' : 'Option'}</th>
-                <th>${isZh ? '类型' : 'Type'}</th>
-                <th>${isZh ? '必需' : 'Required'}</th>
-                <th>${isZh ? '说明' : 'Description'}</th>
+                <th>${t('common.options')}</th>
+                <th>${t('common.type')}</th>
+                <th>${t('common.required')}</th>
+                <th>${t('common.description')}</th>
             </tr>
         </thead>
         <tbody>
@@ -242,8 +230,8 @@ ${(info.options && info.options.length > 0) ? `
                 <td><code class="opt-name">${escapeHtml(opt.name)}</code></td>
                 <td><span class="type-tag">${escapeHtml(opt.type)}</span></td>
                 <td>${opt.required
-            ? `<span class="req-tag required">${isZh ? '必需' : 'Required'}</span>`
-            : `<span class="req-tag optional">${isZh ? '可选' : 'Optional'}</span>`
+            ? `<span class="req-tag required">${t('common.required')}</span>`
+            : `<span class="req-tag optional">${t('common.optional')}</span>`
         }</td>
                 <td>${escapeHtml(opt.description)}</td>
             </tr>`).join('\n            ')}
@@ -251,10 +239,10 @@ ${(info.options && info.options.length > 0) ? `
     </table>
 </div>` : ''}
 
-<!-- 相关命令 -->
+<!-- Related commands -->
 ${related.length > 0 ? `
 <div class="section">
-    <h2>${isZh ? '▎相关命令' : '▎RELATED COMMANDS'} <span class="count">(${related.length})</span></h2>
+    <h2>${t('help.relatedHeading')} <span class="count">(${related.length})</span></h2>
     <div class="related-grid">
         ${related.map(r => `
         <div class="related-item">
@@ -262,23 +250,23 @@ ${related.length > 0 ? `
             <span class="related-summary">${escapeHtml(r.summary || '')}</span>
         </div>`).join('\n        ')}
     </div>
-    <p class="hint">${isZh ? '💡 点击上方命令名可用 F12 跳转查看详情' : '💡 F12 on any command name above to view its help'}</p>
+    <p class="hint">${t('help.relatedHint')}</p>
 </div>` : ''}
 
-<!-- 使用提示 -->
+<!-- Tips -->
 <div class="card tip">
-    <div class="card-title">${isZh ? '💡 使用提示' : '💡 Tips'}</div>
+    <div class="card-title">${t('help.tipsCard')}</div>
     <ul>
-        <li>${isZh ? '鼠标悬停命令名可查看快速摘要' : 'Hover over the command name for a quick summary'}</li>
-        <li>${isZh ? '输入命令后会自动提示可用参数' : 'Auto-completion of parameters after typing the command'}</li>
-        <li>${isZh ? '通过 Ctrl+Shift+P → "切换帮助显示风格" 可在 Webview/纯文本 间切换' : 'Ctrl+Shift+P → "Toggle Help Style" to switch Webview/Plain Text'}</li>
+        <li>${t('help.tipHover')}</li>
+        <li>${t('help.tipCompletion')}</li>
+        <li>${t('help.tipToggle')}</li>
     </ul>
 </div>
 
-<!-- 页脚 -->
+<!-- Footer -->
 <div class="footer">
     <span>Innovus TCL Helper</span>
-    <span>${isZh ? 'F12 / Ctrl+Click 打开帮助' : 'F12 / Ctrl+Click to open help'}</span>
+    <span>${t('help.footerHint')}</span>
 </div>
 
 </body>
@@ -311,7 +299,7 @@ body {
     max-width: 880px;
 }
 
-/* 标题区 */
+/* Header */
 .header {
     margin-bottom: 24px;
     padding-bottom: 18px;
@@ -325,7 +313,7 @@ body {
 }
 .summary { margin-top: 10px; opacity: 0.85; font-size: 15px; }
 
-/* 卡片 */
+/* Cards */
 .card {
     background: var(--card-bg); border: 1px solid var(--border);
     border-radius: 8px; padding: 16px 20px; margin-bottom: 20px;
@@ -337,14 +325,14 @@ body {
 .tip ul { padding-left: 20px; }
 .tip li { font-size: 13px; opacity: 0.82; margin-bottom: 4px; }
 
-/* 章节 */
+/* Sections */
 .section { margin-bottom: 24px; }
 .section h2 { font-size: 16px; font-weight: 600; margin-bottom: 10px; color: var(--accent); }
 .section .count { font-size: 12px; opacity: 0.5; font-weight: 400; }
 .section .desc { opacity: 0.9; }
 .section .hint { font-size: 12px; opacity: 0.55; margin-top: 10px; }
 
-/* 语法 */
+/* Synopsis */
 .usage {
     background: var(--code-bg); border: 1px solid var(--border);
     border-radius: 6px; padding: 14px 18px; overflow-x: auto;
@@ -353,7 +341,7 @@ body {
 }
 .usage code { color: var(--fg); }
 
-/* 参数表格 */
+/* Option table */
 .opts { width: 100%; border-collapse: collapse; font-size: 13px; }
 .opts th {
     text-align: left; padding: 8px 12px; border-bottom: 2px solid var(--border);
@@ -371,7 +359,7 @@ body {
 .req-tag.required { background: rgba(229, 165, 16, 0.15); color: var(--warn); }
 .req-tag.optional { background: rgba(137, 209, 133, 0.12); color: var(--ok); }
 
-/* 相关命令 */
+/* Related commands */
 .related-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .related-item {
     background: var(--card-bg); border: 1px solid var(--border);
@@ -380,13 +368,13 @@ body {
 .related-cmd { color: var(--accent); font-size: 12px; font-weight: 600; display: block; }
 .related-summary { font-size: 11px; opacity: 0.65; display: block; margin-top: 2px; }
 
-/* 页脚 */
+/* Footer */
 .footer {
     margin-top: 32px; padding-top: 14px; border-top: 1px solid var(--border);
     font-size: 11px; opacity: 0.45; display: flex; justify-content: space-between;
 }
 
-/* 通用 */
+/* Generic */
 code {
     font-family: var(--vscode-editor-font-family, 'Menlo', monospace);
     background: var(--code-bg); border-radius: 3px; padding: 1px 5px; font-size: 13px;
@@ -394,7 +382,7 @@ code {
 `;
 
 // ════════════════════════════════════════════════════════════════
-//  Definition Provider — 纯文本模式 F12/Ctrl+Click
+//  Definition Provider — plain text mode F12/Ctrl+Click
 // ════════════════════════════════════════════════════════════════
 
 export class InnovusDefinitionProvider implements vscode.DefinitionProvider {
@@ -418,13 +406,13 @@ export class InnovusDefinitionProvider implements vscode.DefinitionProvider {
 }
 
 // ════════════════════════════════════════════════════════════════
-//  Variable Definition Provider — F12/Ctrl+Click 跳转到 $varName 定义位置
+//  Variable Definition Provider — F12/Ctrl+Click jumps to the $varName definition
 // ════════════════════════════════════════════════════════════════
 
 export class TclVariableDefinitionProvider implements vscode.DefinitionProvider {
     private lintProvider: TclLintProvider | null = null;
 
-    /** 设置 Lint Provider 引用（由 extension.ts 注入） */
+    /** Set the Lint Provider reference (injected by extension.ts) */
     setLintProvider(provider: TclLintProvider): void {
         this.lintProvider = provider;
     }
@@ -441,7 +429,7 @@ export class TclVariableDefinitionProvider implements vscode.DefinitionProvider 
         const line = document.lineAt(position.line).text;
         const col = position.character;
 
-        // ── 检测 $varName 或 ${varName} ──
+        // ── Detect $varName or ${varName} ──
         const dollarRegex = /\$(\{?)([a-zA-Z_][a-zA-Z0-9_]*(?:::[a-zA-Z0-9_]*)*)\}?/g;
         let match: RegExpExecArray | null;
 
@@ -452,14 +440,14 @@ export class TclVariableDefinitionProvider implements vscode.DefinitionProvider 
             if (col >= start && col <= end) {
                 const varName = match[2];
 
-                // 查询变量定义
+                // Look up the variable definitions
                 const { allDefs } = this.lintProvider.getCompiler().queryVariable(
                     varName, result, document.uri.fsPath, position.line + 1
                 );
 
                 if (allDefs.length === 0) { return null; }
 
-                // 返回所有定义位置（VS Code 会显示选择器或直接跳转）
+                // Return every definition site (VS Code shows a picker or jumps directly)
                 const locations: vscode.Location[] = [];
                 for (const def of allDefs) {
                     const defUri = vscode.Uri.file(def.filePath);
@@ -470,7 +458,7 @@ export class TclVariableDefinitionProvider implements vscode.DefinitionProvider 
                     locations.push(new vscode.Location(defUri, defPos));
                 }
 
-                // 如果只有一个定义，直接返回单个 Location
+                // With a single definition, return that Location directly
                 if (locations.length === 1) {
                     return locations[0];
                 }
@@ -478,7 +466,8 @@ export class TclVariableDefinitionProvider implements vscode.DefinitionProvider 
             }
         }
 
-        // ── 检测 set 命令中的变量名（光标在 set 的变量上时，跳转到该变量的引用） ──
+        // ── Detect the variable name in a set command
+        //    (with the cursor on the variable, jump to its references) ──
         const setRegex = /\bset\s+([a-zA-Z_][a-zA-Z0-9_:]*)/g;
         while ((match = setRegex.exec(line)) !== null) {
             const varName = match[1];
@@ -503,15 +492,15 @@ export class TclVariableDefinitionProvider implements vscode.DefinitionProvider 
             }
         }
 
-        // ── 检测 proc 调用（光标在 proc 名上时，跳转到 proc 定义） ──
+        // ── Detect a proc call (with the cursor on the proc name, jump to its definition) ──
         const wordRange = document.getWordRangeAtPosition(position, /[a-zA-Z_][a-zA-Z0-9_]*/);
         if (wordRange) {
             const word = document.getText(wordRange);
-            // 在所有编译单元中查找匹配的 proc 定义
+            // Look for a matching proc definition across every compilation unit
             for (const unit of result.units) {
                 for (const proc of unit.procs) {
                     if (proc.procName === word) {
-                        // 跳转到 proc 定义位置
+                        // Jump to the proc definition
                         const defUri = vscode.Uri.file(unit.filePath);
                         const defPos = new vscode.Position(
                             Math.max(0, proc.line - 1),
@@ -528,10 +517,11 @@ export class TclVariableDefinitionProvider implements vscode.DefinitionProvider 
 }
 
 // ════════════════════════════════════════════════════════════════
-//  Document Link Provider — Ctrl+Click 入口（两种模式均生效）
+//  Document Link Provider — the Ctrl+Click entry point (active in both modes)
 //
-//  关键: provideDocumentLinks 不做模式判断，始终返回链接。
-//  模式切换时 VS Code 无缓存失效问题。命令回调动态判断行为。
+//  Key detail: provideDocumentLinks never inspects the mode, it always
+//  returns links, so VS Code has no stale cache when the mode changes.
+//  The command callback decides the behaviour dynamically.
 // ════════════════════════════════════════════════════════════════
 
 const HELP_CMD = 'innovus-tcl._showHelp';
@@ -565,9 +555,9 @@ export class InnovusDocumentLinkProvider implements vscode.DocumentLinkProvider 
 }
 
 /**
- * Ctrl+Click 命令回调 — 根据当前模式决定行为:
- *   Webview → 打开 Webview 面板
- *   纯文本 → 打开虚拟文档
+ * Ctrl+Click command callback — the behaviour depends on the current mode:
+ *   Webview    → open the Webview panel
+ *   Plain text → open the virtual document
  */
 export function showHelp(context: vscode.ExtensionContext, cmdName: string): void {
     const db = getDB();
@@ -582,7 +572,7 @@ export function showHelp(context: vscode.ExtensionContext, cmdName: string): voi
     }
 }
 
-// ---- 工具 ----
+// ---- Helpers ----
 
 function escapeHtml(text: string): string {
     return text

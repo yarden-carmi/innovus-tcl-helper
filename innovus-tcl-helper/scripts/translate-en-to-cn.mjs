@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 /**
- * EN→CN 翻译脚本 — 将 data_base/en/help 中 CN 缺失的条目翻译为中文
+ * EN→CN translation script — translates the data_base/en/help entries that are
+ * still missing from the CN help set into Chinese.
  *
- * 用法:
+ * Usage:
  *   node scripts/translate-en-to-cn.mjs [--limit N] [--concurrency N] [--dry-run]
- *   默认并发 20
+ *   Concurrency defaults to 20
  *
- * 环境变量:
+ * Environment:
  *   DEEPSEEK_API_KEY
  */
 
@@ -77,15 +78,17 @@ function extractJSON(text) {
 async function translateEntry(enData) {
     const { command, summary, description, options } = enData;
 
-    // 构建 options 列表（只发 name + description 给 AI）
+    // Build the options list (only name + description are sent to the model)
     const optList = (options || []).map(o => ({
         name: o.name,
         description: o.description || ''
     }));
 
-    const systemPrompt = `你是专业的 EDA（电子设计自动化）技术翻译专家。将 Innovus TCL 命令文档从英文翻译为简体中文。
+    // The prompt below deliberately keeps its Chinese terminology: it is the payload
+    // of an English -> Simplified Chinese translator, not user-facing text.
+    const systemPrompt = `You are a professional EDA (electronic design automation) technical translator. Translate Innovus TCL command documentation from English into Simplified Chinese.
 
-术语规范：
+Terminology:
 - timing → 时序, netlist → 网表, placement → 布局, routing → 布线
 - clock tree → 时钟树, power → 电源, ground → 地, cell → 单元
 - instance → 实例, port → 端口, pin → 引脚, layer → 层
@@ -93,15 +96,15 @@ async function translateEntry(enData) {
 - opt/optimization → 优化, signoff → 签核, analysis → 分析
 - mode → 模式, constraint → 约束, slack → 裕量
 
-只输出 JSON，格式为：
-{"summary":"中文摘要(10-20字)","description":"完整中文描述","options":[{"name":"保持原名","description":"中文翻译"},...]}`;
+Output JSON only, in this shape:
+{"summary":"Chinese summary (10-20 characters)","description":"full Chinese description","options":[{"name":"keep the original name","description":"Chinese translation"},...]}`;
 
-    const userPrompt = `命令: ${command}
-英文摘要: ${summary}
-英文描述: ${description || '(无)'}
-选项列表: ${JSON.stringify(optList)}
+    const userPrompt = `Command: ${command}
+English summary: ${summary}
+English description: ${description || '(none)'}
+Options: ${JSON.stringify(optList)}
 
-翻译 summary、description 和每个 option 的 description 为中文。option 的 name 保持原文不变。`;
+Translate the summary, the description and the description of every option into Chinese. Keep the option names unchanged.`;
 
     const result = await callAPI(systemPrompt, userPrompt);
     const jsonStr = extractJSON(result);
@@ -109,7 +112,7 @@ async function translateEntry(enData) {
     try {
         const translated = JSON.parse(jsonStr);
 
-        // 构建完整中文条目
+        // Build the complete Chinese entry
         const cnOptions = (options || []).map((o, i) => ({
             name: o.name,
             description: translated.options?.[i]?.description || o.description || '',
@@ -126,18 +129,18 @@ async function translateEntry(enData) {
             options: cnOptions
         };
     } catch (e) {
-        console.error(`  解析失败: ${e.message}`);
-        console.error(`  原始: ${jsonStr.substring(0, 200)}`);
+        console.error(`  Parse failed: ${e.message}`);
+        console.error(`  Raw: ${jsonStr.substring(0, 200)}`);
         return null;
     }
 }
 
 async function main() {
     console.log('═══════════════════════════════════════');
-    console.log('  EN→CN 翻译工具');
+    console.log('  EN→CN translation tool');
     console.log('═══════════════════════════════════════');
 
-    // 找出 CN 缺失的条目
+    // Find the entries missing from the CN set
     const enFiles = fs.readdirSync(BASE_EN).filter(f => f.endsWith('.json')).sort();
     const cnExisting = new Set(
         fs.readdirSync(BASE_CN).filter(f => f.endsWith('.json')).map(f => f.replace('.json', ''))
@@ -151,15 +154,15 @@ async function main() {
     const total = LIMIT > 0 ? Math.min(LIMIT, missing.length) : missing.length;
     const queue = missing.slice(0, total);
 
-    console.log(`EN 总数: ${enFiles.length}`);
-    console.log(`CN 已有: ${cnExisting.size}`);
-    console.log(`待翻译: ${missing.length}`);
-    console.log(`本次处理: ${total}`);
-    console.log(`并发: ${CONCURRENCY}`);
+    console.log(`EN total:    ${enFiles.length}`);
+    console.log(`CN existing: ${cnExisting.size}`);
+    console.log(`To translate: ${missing.length}`);
+    console.log(`This run:    ${total}`);
+    console.log(`Concurrency: ${CONCURRENCY}`);
     console.log('');
 
     if (DRY_RUN) {
-        console.log('[DRY RUN] 前5个待翻译:');
+        console.log('[DRY RUN] first 5 to translate:');
         queue.slice(0, 5).forEach(f => console.log(`  - ${f.replace('.json', '')}`));
         return;
     }
@@ -168,7 +171,7 @@ async function main() {
     const t0 = Date.now();
     let idx = 0;
 
-    // 进度条
+    // Progress bar
     function drawProgress(current, max) {
         const pct = (current / max * 100).toFixed(1);
         const BAR_WIDTH = 30;
@@ -188,13 +191,13 @@ async function main() {
                 const cnData = await translateEntry(enData);
 
                 if (cnData) {
-                    // 写入 data_base/cn/help/
+                    // Write into data_base/cn/help/
                     fs.writeFileSync(
                         path.join(BASE_CN, file),
                         JSON.stringify(cnData, null, 2),
                         'utf-8'
                     );
-                    // 同时写入项目 help 目录
+                    // And into the project help directory
                     fs.writeFileSync(
                         path.join(PROJ_CN, file),
                         JSON.stringify(cnData, null, 2),
@@ -222,13 +225,13 @@ async function main() {
     console.log('');
 
     const el = ((Date.now() - t0) / 1000).toFixed(0);
-    console.log(`✅ ${completed} 翻译完成, ❌ ${failed} 失败 (${el}s)`);
+    console.log(`✅ ${completed} translated, ❌ ${failed} failed (${el}s)`);
     console.log('');
-    console.log('下一步:');
+    console.log('Next step:');
     console.log('  node scripts/generate-simulations.mjs --lang cn');
 }
 
 main().catch(e => {
-    console.error('致命错误:', e.message);
+    console.error('Fatal error:', e.message);
     process.exit(1);
 });

@@ -1,10 +1,10 @@
 /**
- * Semantic Tokens Provider — 为 Innovus 命令提供语义级语法高亮
+ * Semantic Tokens Provider — semantic syntax highlighting for Innovus commands
  *
- * Token 类型:
- *   function  — Innovus 命令名（会显示为函数/命令色）
- *   parameter — 参数 flag（如 -help, -cell）
- *   variable  — 模式/变量名（非命令条目）
+ * Token types:
+ *   function  — Innovus command name (rendered with the function/command color)
+ *   parameter — option flag (e.g. -help, -cell)
+ *   variable  — mode/variable name (non-command entries)
  */
 
 import * as vscode from 'vscode';
@@ -30,7 +30,7 @@ export class InnovusSemanticTokensProvider implements vscode.DocumentSemanticTok
             const trimmed = line.trimStart();
             if (!trimmed || trimmed.startsWith('#')) { continue; }
 
-            // 提取第一个词作为可能的命令/变量名
+            // Take the first word as a candidate command/variable name
             const firstWordMatch = trimmed.match(/^([a-zA-Z_][a-zA-Z0-9_]*)/);
             if (!firstWordMatch) { continue; }
 
@@ -41,21 +41,21 @@ export class InnovusSemanticTokensProvider implements vscode.DocumentSemanticTok
             if (!info) { continue; }
 
             if (info.is_cmd !== false) {
-                // Innovus 命令 → function 类型高亮
+                // Innovus command → highlight as function
                 builder.push(lineIdx, startChar, word.length, 0, 0);
             } else {
-                // 模式/变量 → variable 类型高亮
+                // Mode/variable → highlight as variable
                 builder.push(lineIdx, startChar, word.length, 2, 0);
             }
 
-            // 高亮该行的参数 flag（-xxx）
+            // Highlight the option flags (-xxx) on this line
             const flagRegex = /(-\w+)/g;
             let match: RegExpExecArray | null;
             while ((match = flagRegex.exec(line)) !== null) {
-                // 排除命令名之后的非 flag 内容
+                // Skip non-flag content that follows the command name
                 const flagName = match[1];
                 const flagStart = match.index;
-                // 只标记已知参数
+                // Only mark known options
                 const isKnownFlag = info.options?.some(o => o.name === flagName);
                 if (isKnownFlag) {
                     builder.push(lineIdx, flagStart, flagName.length, 1, 0);

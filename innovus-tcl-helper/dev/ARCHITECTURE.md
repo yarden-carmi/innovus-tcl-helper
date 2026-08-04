@@ -1,6 +1,6 @@
-# 架构设计文档
+# Architecture
 
-## 整体架构
+## Overall shape
 
 ```
 ┌───────────────────────────────────────────────── ────────┐
@@ -26,131 +26,132 @@
 └───────────────────────────────────────────────────────── ┘
 ```
 
-## 模块详解
+## Modules
 
-### 1. `extension.ts` — 插件入口
+### 1. `extension.ts` — extension entry point
 
-**职责**：激活/停用生命周期管理，注册所有 Provider 和 Command。
+**Responsibility**: the activate/deactivate lifecycle, plus registering every provider and command.
 
 ```typescript
-activate(context) → 读取配置 → 初始化 DB → 注册 Provider → 注册命令
-deactivate()      → 清理 Diagnostics
+activate(context) → read the configuration → initialize the DB → register the providers → register the commands
+deactivate()      → dispose the diagnostics
 ```
 
-**激活条件**：`onLanguage:tcl` — 仅在打开 `.tcl` 文件时激活，不占用非 TCL 项目资源。
+**Activation event**: `onLanguage:tcl` — the extension only activates once a `.tcl` file is
+opened, so it costs nothing in non-TCL projects.
 
-**配置读取**：每次激活时从 `vscode.workspace.getConfiguration('innovus-tcl')` 读取：
+**Configuration**: read from `vscode.workspace.getConfiguration('innovus-tcl')` on every activation:
 
-- 各 Provider 可独立开关
-- 数据库路径可自定义
+- Each provider can be toggled independently
+- The database path can be customized
 
-### 2. `commands.ts` — 命令数据库
+### 2. `commands.ts` — the command database
 
-**设计模式**：单例模式 + 懒加载。
+**Design**: a lazily loaded singleton.
 
 ```
-CommandDB (单例)
-├── Map<string, CmdInfo>  // 命令名 → 命令信息
-├── load()                // 遍历 data_base/help/deepseek-chat/*.json
-├── get(name)             // O(1) 精确查找
-├── search(prefix)        // 前缀模糊搜索
-├── isCommand(name)       // 是否存在
-└── reload()              // 清空并重新加载
+CommandDB (singleton)
+├── Map<string, CmdInfo>  // command name → command information
+├── load()                // walks data_base/help/deepseek-chat/*.json
+├── get(name)             // O(1) exact lookup
+├── search(prefix)        // fuzzy prefix search
+├── isCommand(name)       // existence check
+└── reload()              // clear and load again
 ```
 
-**数据结构**：
+**Data structures**:
 
 ```typescript
 interface CmdInfo {
     command: string;       // e.g. "addInst"
-    is_cmd: boolean;       // 始终为 true
-    summary: string;       // 中文摘要
-    description: string;   // 中文详细描述
-    usage: string;         // 命令语法
-    options: CmdOption[];  // 参数列表
+    is_cmd: boolean;       // always true for commands
+    summary: string;       // short summary
+    description: string;   // full description
+    usage: string;         // command syntax
+    options: CmdOption[];  // option list
 }
 
 interface CmdOption {
     name: string;          // e.g. "-cell"
-    description: string;   // 中文说明
+    description: string;   // option description
     required: boolean;
     type: string;          // "string"|"flag"|"enum"|"point"|"int"|"float"
 }
 ```
 
-**性能设计**：
+**Performance notes**:
 
-- **懒加载**：首次调用 `get()` / `getCommandNames()` 时才读取文件
-- **单次遍历**：一次 `fs.readdirSync` + 逐个 `fs.readFileSync`，无递归
-- **内存占用**：2175 条命令 × ~1KB/条 ≈ 2.5MB（Map 内存）
-- **查找速度**：`Map.get()` 为 O(1) 哈希查找
+- **Lazy loading**: the files are only read on the first `get()` / `getCommandNames()` call
+- **Single pass**: one `fs.readdirSync` plus one `fs.readFileSync` per file, no recursion
+- **Memory**: 2175 commands × ~1KB each ≈ 2.5MB (the Map)
+- **Lookup speed**: `Map.get()` is an O(1) hash lookup
 
-### 3. `hover.ts` — 悬停提示
+### 3. `hover.ts` — hover tooltips
 
-**触发时机**：鼠标悬停在 TCL 文件中的任意单词上。
+**Trigger**: hovering any word in a TCL file.
 
-**处理流程**：
+**Flow**:
 
 ```
-获取光标位置单词 → 查询 CommandDB → 命中？→ 构建 Markdown → 返回 Hover
-                                    → 未命中？→ 返回 null（不干扰其他 Provider）
+take the word under the cursor → query the CommandDB → hit?  → build the Markdown → return a Hover
+                                                     → miss? → return null (other providers stay unaffected)
 ```
 
-**Markdown 内容结构**：
+**Markdown structure**:
 
-1. 命令名（二级标题）
-2. 中文摘要（加粗）
-3. 语法代码块（tcl 语法高亮）
-4. 详细说明
-5. 参数表格（参数名 / 必需 / 类型 / 说明）
+1. The command name (a level-2 heading)
+2. The summary (bold)
+3. The syntax code block (with tcl highlighting)
+4. The full description
+5. The option table (option / required / type / description)
 
-### 4. `completion.ts` — 自动补全
+### 4. `completion.ts` — auto-completion
 
-**触发时机**：输入空格 、破折号 `-`、下划线 `_` 时触发。
+**Trigger**: typing a space, a dash `-` or an underscore `_`.
 
-**两阶段判断**：
+**Two cases**:
 
-| 场景       | 判断条件                                | 行为                 |
-| ---------- | --------------------------------------- | -------------------- |
-| 命令名补全 | 行首/刚换行，只有一个词且不以`-` 开头 | 列出全部 2175 个命令 |
-| 参数补全   | 行中已有命令名 + 空格，在参数位置       | 列出该命令的参数     |
+| Case | Condition | Behaviour |
+| ---- | --------- | --------- |
+| Command name completion | Start of a line, a single word that does not start with `-` | Lists all 2175 commands |
+| Option completion | A command name plus a space is already on the line, cursor in the option area | Lists the options of that command |
 
-**参数补全优化**：
+**Option completion details**:
 
-- 已使用的 `flag` 类型参数不再提示（避免重复）
-- 必需参数排在可选参数前面（`sortText: "0"` vs `"1"`）
-- 枚举参数在文档中显示可选值
+- `flag` options that are already used are no longer suggested (no duplicates)
+- Required options sort before optional ones (`sortText: "0"` vs `"1"`)
+- Enum options list their choices in the documentation
 
-**触发器字符**：`[' ', '-', '_']`，覆盖 TCL 命令分隔和参数前缀。
+**Trigger characters**: `[' ', '-', '_']`, covering the TCL command separator and the option prefix.
 
-### 5. `diagnostics.ts` — 静态检查
+### 5. `diagnostics.ts` — static checking
 
-**触发时机**：保存文件时（`onDidSaveTextDocument`）+ 切换编辑器时。
+**Trigger**: on save (`onDidSaveTextDocument`) and on editor change.
 
-**检查项**：
+**Checks**:
 
-| 检查项           | 等级    | 实现                            |
-| ---------------- | ------- | ------------------------------- |
-| 多余`]`        | Error   | 逐行计数，`depth < 0` 时报错  |
-| 多余`}`        | Error   | 同上                            |
-| 缺少`]`        | Error   | 文档末尾`depth > 0`           |
-| 缺少`}`        | Error   | 同上                            |
-| 未闭合`"`      | Error   | 逐行状态机，支持`\"` 转义     |
-| 命令缺少必需参数 | Warning | 对比 JSON 中的`required` 参数 |
+| Check | Level | Implementation |
+| ----- | ----- | -------------- |
+| Extra `]` | Error | Counted per line, reported when `depth < 0` |
+| Extra `}` | Error | As above |
+| Missing `]` | Error | `depth > 0` at the end of the document |
+| Missing `}` | Error | As above |
+| Unclosed `"` | Error | A per-line state machine that honours `\"` escapes |
+| Missing required argument | Warning | Compared against the `required` options in the JSON |
 
-**TCL 特殊性处理**：
+**TCL-specific handling**:
 
-- 跳过 `#` 开头的注释行
-- 跳过行内 `#` 注释之后的内容（非转义）
-- 跳过 TCL 内置命令（`set`, `if`, `for`, `puts` 等 40+ 个）
-- 不报告未知命令（TCL 允许自定义 `proc`）
+- Comment-only `#` lines are skipped
+- Everything after an unescaped inline `#` is skipped
+- TCL built-ins (`set`, `if`, `for`, `puts` and 40+ more) are skipped
+- Unknown commands are not reported (TCL allows user-defined `proc`s)
 
-## 技术选型理由
+## Design decisions
 
-| 决策                 | 理由                                         |
-| -------------------- | -------------------------------------------- |
-| TypeScript           | VS Code 原生 API，类型安全，编译期查错       |
-| 零运行时依赖         | 减小插件体积，避免依赖冲突                   |
-| 同步文件 I/O         | 数据加载仅在激活时执行一次，同步加载简单可靠 |
-| Map 数据结构         | O(1) 查找，ES6 原生支持                      |
-| DiagnosticCollection | VS Code 标准诊断 API，自动关联文档生命周期   |
+| Decision | Rationale |
+| -------- | --------- |
+| TypeScript | The native VS Code API, type safety, errors caught at compile time |
+| Zero runtime dependencies | Smaller extension, no dependency conflicts |
+| Synchronous file I/O | The data loads once on activation, where synchronous reads are simple and reliable |
+| Map data structure | O(1) lookup, native to ES6 |
+| DiagnosticCollection | The standard VS Code diagnostics API, tied to the document lifecycle automatically |

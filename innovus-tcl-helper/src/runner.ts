@@ -1,11 +1,12 @@
 /**
- * TCL Script Runner — 基于 tclsh 的 TCL 代码执行引擎
+ * TCL Script Runner — a tclsh-based TCL execution engine
  *
- * 核心功能:
- *   1. 通过 tclsh 执行标准 TCL 代码（内置 tclsh9.0，无需用户安装）
- *   2. 自动拦截 Innovus 专有命令，输出文档说明代替执行
- *   3. 支持单文件运行 + .f 文件项目运行
- *   4. 支持自定义 tclsh 路径（innovus-tcl.tclshPath）
+ * Core features:
+ *   1. Executes standard TCL code through tclsh (tclsh9.0 is bundled, no user install needed)
+ *   2. Automatically intercepts Innovus-only commands and prints their documentation
+ *      instead of executing them
+ *   3. Supports single-file runs and .f file project runs
+ *   4. Supports a custom tclsh path (innovus-tcl.tclshPath)
  */
 
 import * as cp from 'child_process';
@@ -15,9 +16,10 @@ import * as os from 'os';
 import { getDB, CmdInfo } from './commands';
 import { tokenize, TokenType } from './tcl-ast';
 import { TclCompiler } from './compiler';
+import { t } from './i18n';
 
 // ════════════════════════════════════════════════════════════
-//  类型
+//  Types
 // ════════════════════════════════════════════════════════════
 
 export interface RunResult {
@@ -27,7 +29,7 @@ export interface RunResult {
     exitCode: number;
     innovusCommands: string[];
     duration: number;
-    /** 输出文件路径（如果配置了保存） */
+    /** Output file path (when saving is configured) */
     outputFile?: string;
 }
 
@@ -47,38 +49,38 @@ export interface ProjectRunResult {
     errorCount: number;
 }
 
-/** 运行输出保存配置 */
+/** Configuration for saving run output */
 export interface RunOutputConfig {
-    /** 是否保存输出到文件 */
+    /** Whether to save the output to a file */
     enabled: boolean;
-    /** 输出目录（绝对路径，不存在则自动创建） */
+    /** Output directory (absolute path, created automatically when missing) */
     dir: string;
 }
 
 // ════════════════════════════════════════════════════════════
-//  常量
+//  Constants
 // ════════════════════════════════════════════════════════════
 
 const RUN_TIMEOUT = 30000;
 
 // ════════════════════════════════════════════════════════════
-//  平台检测
+//  Platform detection
 // ════════════════════════════════════════════════════════════
 
-/** 获取当前平台 triplet，如 darwin-arm64, linux-x64, win32-x64 */
+/** Get the current platform triplet, e.g. darwin-arm64, linux-x64, win32-x64 */
 function getPlatformTriplet(): string {
     const plat = os.platform();    // 'darwin' | 'linux' | 'win32'
     const arch = os.arch();        // 'arm64' | 'x64' | 'ia32'
-    // 标准化: macOS 统一用 darwin
+    // Normalized: macOS always uses darwin
     return `${plat}-${arch}`;
 }
 
-/** 各平台 tclsh 二进制名称 */
+/** The tclsh binary name for each platform */
 function getTclshBinaryName(): string {
     return os.platform() === 'win32' ? 'tclsh9.0.exe' : 'tclsh9.0';
 }
 
-/** 各平台系统 tclsh 候选路径 */
+/** Candidate system tclsh paths per platform */
 const SYSTEM_TCLSH_CANDIDATES: Record<string, string[]> = {
     'darwin-arm64': ['/opt/homebrew/bin/tclsh9.0', '/usr/local/bin/tclsh9.0', '/usr/bin/tclsh', 'tclsh', 'tclsh9.0'],
     'darwin-x64': ['/usr/local/bin/tclsh9.0', '/usr/bin/tclsh', 'tclsh', 'tclsh9.0'],
@@ -88,34 +90,20 @@ const SYSTEM_TCLSH_CANDIDATES: Record<string, string[]> = {
     'win32-ia32': ['tclsh9.0.exe', 'tclsh.exe'],
 };
 
-/** 获取 tclsh 未找到时的平台特定安装指引 */
-export function getTclshInstallGuide(isZh: boolean): string {
+/** Platform-specific installation guidance shown when tclsh is not found */
+export function getTclshInstallGuide(): string {
     const plat = os.platform();
-    const isWindows = plat === 'win32';
-    const isMac = plat === 'darwin';
-
-    if (isMac) {
-        return isZh
-            ? '请安装 tcl-tk: brew install tcl-tk\n或在设置中配置 innovus-tcl.tclshPath 指向 tclsh 路径'
-            : 'Install tcl-tk: brew install tcl-tk\nOr set innovus-tcl.tclshPath to your tclsh path';
-    }
-    if (isWindows) {
-        return isZh
-            ? '请安装 ActiveTcl (https://www.activestate.com/products/tcl/)\n或在设置中配置 innovus-tcl.tclshPath 指向 tclsh.exe 路径'
-            : 'Install ActiveTcl from https://www.activestate.com/products/tcl/\nOr set innovus-tcl.tclshPath to your tclsh.exe path';
-    }
-    // Linux
-    return isZh
-        ? '请安装 tcl: sudo apt install tcl 或 sudo dnf install tcl\n或在设置中配置 innovus-tcl.tclshPath 指向 tclsh 路径'
-        : 'Install tcl: sudo apt install tcl or sudo dnf install tcl\nOr set innovus-tcl.tclshPath to your tclsh path';
+    if (plat === 'darwin') { return t('tclsh.guideMac'); }
+    if (plat === 'win32') { return t('tclsh.guideWindows'); }
+    return t('tclsh.guideLinux');
 }
 
 export class TclRunner {
     private tclshPathCache: string | null = null;
-    /** 仿真语言: 'zh' 优先加载中文 proc, 'en' 优先加载英文 proc */
-    public language: 'zh' | 'en' = 'zh';
+    /** Simulation data language: 'zh' prefers the Chinese procs, 'en' prefers the English procs */
+    public language: 'zh' | 'en' = 'en';
 
-    /** 查找 tclsh: 内置(平台子目录) > 用户配置 > 系统搜索 */
+    /** Find tclsh: bundled (platform subdirectory) > user configuration > system search */
     findTclsh(extensionPath: string, configTclshPath?: string): string | null {
         if (this.tclshPathCache && fs.existsSync(this.tclshPathCache)) {
             return this.tclshPathCache;
@@ -125,20 +113,20 @@ export class TclRunner {
         const triplet = getPlatformTriplet();
         const binName = getTclshBinaryName();
 
-        // 1. 扩展内置 tclsh9.0 (bin/<platform>/tclsh9.0)
+        // 1. tclsh9.0 bundled with the extension (bin/<platform>/tclsh9.0)
         const bundled = path.join(extensionPath, 'bin', triplet, binName);
         if (fs.existsSync(bundled)) {
             const v = this.verifyTclsh(bundled);
             if (v) { this.tclshPathCache = v; return v; }
         }
 
-        // 2. 用户配置
+        // 2. User configuration
         if (configTclshPath && fs.existsSync(configTclshPath)) {
             const v = this.verifyTclsh(configTclshPath);
             if (v) { this.tclshPathCache = v; return v; }
         }
 
-        // 3. 系统搜索（按平台候选路径）
+        // 3. System search (candidate paths per platform)
         const candidates = SYSTEM_TCLSH_CANDIDATES[triplet] ||
             ['tclsh', 'tclsh9.0', 'tclsh9.0.exe'];
         for (const c of candidates) {
@@ -160,7 +148,7 @@ export class TclRunner {
         return null;
     }
 
-    /** 运行单个 TCL 脚本 */
+    /** Run a single TCL script */
     async runScript(
         content: string, workDir: string, extensionPath: string,
         configTclshPath?: string, outputConfig?: RunOutputConfig,
@@ -169,8 +157,7 @@ export class TclRunner {
         const t0 = Date.now();
         const tclsh = this.findTclsh(extensionPath, configTclshPath);
         if (!tclsh) {
-            const msg = this.language === 'zh' ? '未找到 tclsh' : 'tclsh not found';
-            return { success: false, stdout: '', stderr: msg, exitCode: -1, innovusCommands: [], duration: 0 };
+            return { success: false, stdout: '', stderr: t('tclsh.notFoundShort'), exitCode: -1, innovusCommands: [], duration: 0 };
         }
 
         const cmds = this.detectInnovusCommands(content, extensionPath);
@@ -186,7 +173,7 @@ export class TclRunner {
                 ...r, innovusCommands: cmds.map(c => c.command), duration: Date.now() - t0
             };
 
-            // 保存输出到文件
+            // Save the output to a file
             if (outputConfig?.enabled && outputConfig.dir) {
                 result.outputFile = this.saveOutputFile(
                     outputConfig.dir, 'run',
@@ -196,13 +183,16 @@ export class TclRunner {
 
             return result;
         } catch (e: any) {
-            return { success: false, stdout: '', stderr: `异常: ${e.message}`, exitCode: -1, innovusCommands: cmds.map(c => c.command), duration: Date.now() - t0 };
+            return { success: false, stdout: '', stderr: t('run.genericException', e.message), exitCode: -1, innovusCommands: cmds.map(c => c.command), duration: Date.now() - t0 };
         } finally {
             try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
         }
     }
 
-    /** 按 .f 文件顺序运行整个项目（source + catch 保证：遇错即停，逐文件追踪状态） */
+    /**
+     * Run the whole project in .f file order (source + catch guarantee:
+     * stop on the first error, track the status of every file).
+     */
     async runProject(
         fFilePath: string, workspaceRoot: string, extensionPath: string,
         configTclshPath?: string, outputConfig?: RunOutputConfig,
@@ -221,7 +211,7 @@ export class TclRunner {
             return { success: false, results: [], totalDuration: Date.now() - t0, fileCount: 0, errorCount: 1 };
         }
 
-        // 预扫描所有 Innovus 命令
+        // Pre-scan every Innovus command
         const allCmds = new Set<string>();
         const fileMetas: Array<{ relPath: string; absPath: string; cmds: string[] }> = [];
         for (const u of cr.units) {
@@ -240,14 +230,14 @@ export class TclRunner {
         for (const n of allCmds) { const info = db.get(n); if (info) { cmdList.push(info); } }
         const preamble = this.generatePreamble(cmdList, extensionPath);
 
-        // 构建脚本：每个文件用 catch {source} 包装，遇错即停
+        // Build the script: wrap each file in catch {source} and stop on the first error
         let combinedScript = preamble + '\n' + this.buildCompatLayer(simOutputMode);
-        combinedScript += '\n# ===== 顺序执行 TCL 文件 =====\n';
+        combinedScript += '\n# ===== Execute the TCL files in order =====\n';
         combinedScript += 'set _project_ok 1\n';
         for (const fm of fileMetas) {
             const escapedPath = fm.absPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
             combinedScript += `\nputs "_FILE_BEGIN_ ${fm.relPath}"\n`;
-            // 可见分隔线（不会被过滤）
+            // Visible separator (never filtered out)
             combinedScript += `puts "\\n─── 📄 ${fm.relPath} ───\\n"\n`;
             combinedScript += `if {[catch {source "${escapedPath}"} _err]} {\n`;
             combinedScript += `    puts "_FILE_ERROR_ ${fm.relPath}"\n`;
@@ -268,7 +258,7 @@ export class TclRunner {
                 : workspaceRoot;
             const execResult = await this.executeTclsh(tclsh, tmpFile, workDir);
 
-            // 解析标记，逐文件判定状态
+            // Parse the markers and determine the status of every file
             const results: ProjectRunResult['results'] = [];
             const allOutput = execResult.stdout;
             let errors = 0;
@@ -278,21 +268,20 @@ export class TclRunner {
                 if (allOutput.includes(okMarker)) {
                     results.push({ filePath: fm.relPath, success: true, stdout: allOutput, stderr: '', innovusCommands: fm.cmds, duration: 0 });
                 } else if (allOutput.includes(errMarker)) {
-                    // 合并 stdout + stderr 构建完整错误信息
+                    // Merge stdout + stderr into the full error message
                     const errIdx = allOutput.indexOf(errMarker);
                     const errInfoIdx = allOutput.indexOf('_ERROR_INFO_', errIdx);
                     const errMsgIdx = allOutput.indexOf('_ERROR_MSG_', errIdx);
                     const parts: string[] = [];
-                    const isZh = this.language === 'zh';
 
-                    // 1. 简短错误消息
+                    // 1. Short error message
                     if (errMsgIdx >= 0) {
                         const msgEnd = allOutput.indexOf('\n', errMsgIdx);
                         const msg = allOutput.substring(errMsgIdx + '_ERROR_MSG_ '.length, msgEnd >= 0 ? msgEnd : allOutput.length).trim();
-                        if (msg) { parts.push(isZh ? `错误: ${msg}` : `Error: ${msg}`); }
+                        if (msg) { parts.push(t('run.error', msg)); }
                     }
 
-                    // 2. 堆栈跟踪（含 proc 名、行号）
+                    // 2. Stack trace (with proc names and line numbers)
                     if (errInfoIdx >= 0) {
                         const infoStart = errInfoIdx + '_ERROR_INFO_ '.length;
                         const nextMarker = allOutput.indexOf('_FILE_', infoStart);
@@ -301,37 +290,35 @@ export class TclRunner {
                         if (info) { parts.push(info); }
                     }
 
-                    // 3. stderr（tclsh 编译错误在此）
+                    // 3. stderr (this is where tclsh compilation errors show up)
                     const stderrText = execResult.stderr.trim();
                     if (stderrText && !parts.some(p => p.includes(stderrText.substring(0, 30)))) {
                         parts.push(`[stderr] ${stderrText}`);
                     }
 
-                    // 4. 出问题文件
-                    parts.push(isZh ? `文件: ${fm.relPath}` : `File: ${fm.relPath}`);
-                    parts.push(isZh ? `路径: ${fm.absPath}` : `Path: ${fm.absPath}`);
+                    // 4. The offending file
+                    parts.push(t('common.file') + `: ${fm.relPath}`);
+                    parts.push(t('run.pathLabel', fm.absPath));
 
                     const errMsg = parts.join('\n');
                     results.push({ filePath: fm.relPath, success: false, stdout: allOutput, stderr: errMsg, innovusCommands: fm.cmds, duration: 0 });
                     errors++;
                     break;
                 } else {
-                    // 未被执行到（前面的文件出错了）
-                    const notRunMsg = this.language === 'zh' ? '前置文件执行失败，未运行到此文件' : 'Previous file failed, skipped';
-                    results.push({ filePath: fm.relPath, success: false, stdout: '', stderr: notRunMsg, innovusCommands: fm.cmds, duration: 0 });
+                    // Never reached (an earlier file failed)
+                    results.push({ filePath: fm.relPath, success: false, stdout: '', stderr: skippedMessage(), innovusCommands: fm.cmds, duration: 0 });
                     errors++;
                 }
             }
 
-            // 如果有文件成功执行但没错误，补上剩余的未执行文件
+            // If some files ran without errors, fill in the remaining files that never ran
             for (let i = results.length; i < fileMetas.length; i++) {
                 const fm = fileMetas[i];
-                const notRunMsg = this.language === 'zh' ? '前置文件执行失败，未运行到此文件' : 'Previous file failed, skipped';
-                results.push({ filePath: fm.relPath, success: false, stdout: '', stderr: notRunMsg, innovusCommands: fm.cmds, duration: 0 });
+                results.push({ filePath: fm.relPath, success: false, stdout: '', stderr: skippedMessage(), innovusCommands: fm.cmds, duration: 0 });
                 errors++;
             }
 
-            // 保存输出到文件
+            // Save the output to a file
             let outputFile: string | undefined;
             if (outputConfig?.enabled && outputConfig.dir) {
                 outputFile = this.saveOutputFile(
@@ -367,8 +354,8 @@ export class TclRunner {
     }
 
     /**
-     * 保存运行输出到文件。
-     * @returns 输出文件的绝对路径
+     * Save the run output to a file.
+     * @returns the absolute path of the output file
      */
     private saveOutputFile(
         outDir: string, baseName: string,
@@ -392,18 +379,18 @@ export class TclRunner {
             content += `── STDERR ──\n${stderr}\n`;
         }
         fs.writeFileSync(filePath, content, 'utf-8');
-        console.log(`[TCL Runner] 输出已保存: ${filePath}`);
+        console.log(t('run.outputSaved', filePath));
         return filePath;
     }
 
-    /** TCL 内置命令集合 — 不能被 proc 包装覆盖，否则会破坏执行流 */
+    /** The set of TCL built-ins — wrapping these in a proc would break the execution flow */
     private static readonly TCL_BUILTINS = new Set([
-        'source',   // TCL 原生文件加载，被覆盖会导致 .tcl 文件无法加载
+        'source',   // native TCL file loading; overriding it stops .tcl files from loading
     ]);
 
     /**
-     * 生成 Innovus 命令 proc 包装器。
-     * 优先使用 AI 生成的仿真数据，否则显示命令文档。
+     * Generate the proc wrappers for Innovus commands.
+     * Prefers AI-generated simulation data, otherwise prints the command documentation.
      */
     private generatePreamble(cmds: CmdInfo[], extensionPath: string): string {
         if (cmds.length === 0) { return ''; }
@@ -414,19 +401,19 @@ export class TclRunner {
         for (const cmd of cmds) {
             const cmdName = cmd.command;
 
-            // 跳过 TCL 内置命令，保持原生行为
+            // Skip TCL built-ins to preserve their native behaviour
             if (TclRunner.TCL_BUILTINS.has(cmdName)) {
                 continue;
             }
 
-            // 1. 尝试加载 AI 仿真数据
+            // 1. Try to load the AI simulation data
             const simCode = this.loadSimulation(cmdName, extensionPath);
             if (simCode) {
                 preamble += simCode + '\n';
                 continue;
             }
 
-            // 2. 无仿真数据：生成文档输出包装器
+            // 2. No simulation data: generate a documentation-printing wrapper
             const summary = cmd.summary || '';
             preamble += `# ${summary}\n`;
             preamble += `proc ${cmdName} {args} {\n`;
@@ -434,25 +421,25 @@ export class TclRunner {
             preamble += `    puts "\\[Innovus\\] ${cmdName}"\n`;
             preamble += `    puts "═══════════════════════════════════════"\n`;
             preamble += `    puts "  ${summary}"\n    puts ""\n`;
-            preamble += `    puts "  调用参数: $args"\n`;
+            preamble += `    puts "  ${t('sim.arguments')}: $args"\n`;
 
             if (cmd.options && cmd.options.length > 0) {
                 const req = cmd.options.filter(o => o.required);
                 const opt = cmd.options.filter(o => !o.required);
                 if (req.length > 0) {
-                    preamble += `    puts "  必选参数:"\n`;
+                    preamble += `    puts "  ${t('sim.requiredOptions')}"\n`;
                     for (const o of req) {
                         preamble += `    puts "    ${o.name}  ${o.description.replace(/"/g, '\\"')}"\n`;
                     }
                 }
                 if (opt.length > 0) {
-                    preamble += `    puts "  可选参数 (${opt.length}个):"\n`;
+                    preamble += `    puts "  ${t('sim.optionalOptions', opt.length)}"\n`;
                     for (const o of opt.slice(0, 10)) {
                         const desc = (o.description || '').replace(/"/g, '\\"');
                         preamble += `    puts "    ${o.name}  ${desc}"\n`;
                     }
                     if (opt.length > 10) {
-                        preamble += `    puts "    ... 还有 ${opt.length - 10} 个参数"\n`;
+                        preamble += `    puts "    ${t('sim.moreOptions', opt.length - 10)}"\n`;
                     }
                 }
             }
@@ -462,25 +449,26 @@ export class TclRunner {
         return preamble;
     }
 
-    /** 仿真 DB 缓存: lang → (cmdName → procCode) */
+    /** Simulation DB cache: lang → (cmdName → procCode) */
     private simDbCache: Map<string, Map<string, string>> = new Map();
 
     /**
-     * 加载 AI 预生成的仿真数据。
-     * 优先从 .db.tcl 单文件读取（减少文件系统开销），回退到独立 .tcl 文件。
-     * 按 language 优先级加载：zh 优先 cn → en，en 优先 en → cn。
+     * Load the AI pre-generated simulation data.
+     * Prefers the single .db.tcl file (fewer file system round trips) and falls back
+     * to the individual .tcl files.
+     * Loading order follows the language: zh prefers cn → en, en prefers en → cn.
      */
     private loadSimulation(cmdName: string, extensionPath: string): string | null {
         const languages = this.language === 'zh' ? ['cn', 'en'] : ['en', 'cn'];
         for (const lang of languages) {
-            // 1. 尝试单文件 DB
+            // 1. Try the single-file DB
             const dbFile = path.join(extensionPath, 'data', 'simulations', `${lang}.db.tcl`);
             if (fs.existsSync(dbFile)) {
                 const entry = this.loadFromDb(dbFile, lang, cmdName);
                 if (entry) { return entry; }
-                continue; // DB 存在但没有此命令，尝试下一个语言
+                continue; // The DB exists but has no entry for this command, try the next language
             }
-            // 2. 回退到独立 .tcl 文件
+            // 2. Fall back to the individual .tcl file
             const simFile = path.join(extensionPath, 'data', 'simulations', lang, `${cmdName}.tcl`);
             if (fs.existsSync(simFile)) {
                 try {
@@ -494,10 +482,10 @@ export class TclRunner {
         return null;
     }
 
-    /** 从单文件 DB 中按需提取 proc */
+    /** Extract a proc on demand from the single-file DB */
     private loadFromDb(dbFile: string, lang: string, cmdName: string): string | null {
         if (!this.simDbCache.has(lang)) {
-            // 首次加载：解析整个 DB 文件
+            // First load: parse the whole DB file
             try {
                 const content = fs.readFileSync(dbFile, 'utf-8');
                 const map = new Map<string, string>();
@@ -517,7 +505,7 @@ export class TclRunner {
         return this.simDbCache.get(lang)?.get(cmdName) || null;
     }
 
-    /** 检查 TCL 代码括号是否匹配 */
+    /** Check whether the braces in the TCL code are balanced */
     private bracesMatch(tcl: string): boolean {
         const openB = (tcl.match(/\{/g) || []).length;
         const closeB = (tcl.match(/\}/g) || []).length;
@@ -525,20 +513,20 @@ export class TclRunner {
     }
 
     /**
-     * 构建 TCL 兼容层：echo + 文件辅助 proc + 增强 unknown handler
+     * Build the TCL compatibility layer: echo + file helper procs + an enhanced unknown handler
      */
     private buildCompatLayer(simOutputMode: 'dry-run' | 'mkdir'): string {
-        let code = '\n# ===== TCL 兼容层 =====\n';
+        let code = '\n# ===== TCL compatibility layer =====\n';
         code += 'if {[info commands echo] eq ""} { proc echo {args} { puts [join $args " "] } }\n';
 
-        // 文件操作辅助
-        code += '\n# ===== 文件操作辅助 =====\n';
+        // File operation helpers
+        code += '\n# ===== File operation helpers =====\n';
         code += `set ::_sim_file_mode "${simOutputMode}"\n`;
         code += 'proc _check_input_file {filepath} {\n';
         code += '    if {[file exists $filepath]} {\n';
-        code += '        puts "   📂 输入文件: $filepath"\n';
+        code += `        puts "   📂 ${t('sim.inputFile')}: $filepath"\n`;
         code += '    } else {\n';
-        code += '        puts "   ⚠ 输入文件不存在: $filepath"\n';
+        code += `        puts "   ⚠ ${t('sim.inputFileMissing')}: $filepath"\n`;
         code += '    }\n';
         code += '}\n';
         code += 'proc _handle_output_file {filepath} {\n';
@@ -546,34 +534,34 @@ export class TclRunner {
         code += '        set dir [file dirname $filepath]\n';
         code += '        if {![file exists $dir]} {\n';
         code += '            file mkdir $dir\n';
-        code += '            puts "   📁 创建目录: $dir"\n';
+        code += `            puts "   📁 ${t('sim.createdDir')}: $dir"\n`;
         code += '        }\n';
         code += '        if {![file exists $filepath]} {\n';
         code += '            set f [open $filepath w]\n';
         code += '            puts $f "# Innovus TCL Simulator Output"\n';
         code += '            close $f\n';
         code += '        }\n';
-        code += '        puts "   📄 生成文件: $filepath"\n';
+        code += `        puts "   📄 ${t('sim.generatedFile')}: $filepath"\n`;
         code += '    } else {\n';
-        code += '        puts "   📄 \\[dry-run\\] 将生成文件: $filepath"\n';
+        code += `        puts "   📄 \\[dry-run\\] ${t('sim.wouldGenerateFile')}: $filepath"\n`;
         code += '    }\n';
         code += '}\n';
 
-        // 未知命令处理 + -file 参数检测
-        code += '\n# 兜底：未注册命令 + 文件检测\n';
+        // Unknown command handling + -file argument detection
+        code += '\n# Fallback: unregistered commands + file detection\n';
         code += 'rename unknown _tcl_unknown\n';
-        // TCL 内置命令集合（用于 unknown 检测）
+        // The set of TCL built-ins (used by the unknown handler)
         code += 'set ::_tcl_builtins {set puts proc if while for foreach switch return break continue catch error eval expr source incr append lappend llength lindex lrange lsort split join regexp regsub string scan format open close gets read file glob cd pwd exit rename info array dict upvar uplevel namespace variable global after vwait update clock encoding fconfigure socket package require apply coroutine tailcall try throw}\n';
         code += 'proc unknown {args} {\n';
         code += '    set _cmd [lindex $args 0]\n';
         code += '    set _is_tcl [lsearch -exact $::_tcl_builtins $_cmd]\n';
         code += '    if {$_is_tcl >= 0} {\n';
-        code += '        # TCL 内置命令，执行原生行为\n';
+        code += '        # A TCL built-in, run the native behaviour\n';
         code += '        return [uplevel ::_tcl_unknown {*}$args]\n';
         code += '    }\n';
         code += '    puts "\\[⚠ Unknown\\] $_cmd: [lrange $args 1 end]"\n';
         code += '    set _rest [lrange $args 1 end]\n';
-        code += '    # 判断命令类型：输入命令 vs 输出命令\n';
+        code += '    # Determine the command kind: input command vs output command\n';
         code += '    set _is_input [regexp {^(read_|load_|source$|defIn$|init_)} $_cmd]\n';
         code += '    set _is_output [regexp {^(report_|write_|save_|defOut$)} $_cmd]\n';
         code += '    for {set _i 0} {$_i < [llength $_rest]} {incr _i} {\n';
@@ -613,14 +601,23 @@ export class TclRunner {
             proc.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
             proc.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
             proc.on('close', (code: number | null) => { done(code === 0 && !stderr.trim(), code ?? -1); });
-            proc.on('error', (e: Error) => { stderr += `进程错误: ${e.message}`; done(false, -1); });
-            setTimeout(() => { if (!settled) { proc.kill(); stderr += '\n⏱ 超时'; done(false, -1); } }, RUN_TIMEOUT);
+            proc.on('error', (e: Error) => { stderr += t('run.processError', e.message); done(false, -1); });
+            setTimeout(() => { if (!settled) { proc.kill(); stderr += t('run.timeout'); done(false, -1); } }, RUN_TIMEOUT);
         });
     }
 }
 
+/**
+ * stderr message used for files that were never reached because an earlier file failed.
+ * extension.ts compares against this exact string to render the ⏭ status, so both sides
+ * must resolve it through the same helper.
+ */
+export function skippedMessage(): string {
+    return t('run.skipped');
+}
+
 // ════════════════════════════════════════════════════════════
-//  单例
+//  Singleton
 // ════════════════════════════════════════════════════════════
 
 let runnerInstance: TclRunner | null = null;

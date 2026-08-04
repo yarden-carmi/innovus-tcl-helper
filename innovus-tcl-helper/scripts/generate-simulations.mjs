@@ -1,19 +1,19 @@
 #!/usr/bin/env node
 /**
- * Innovus 命令仿真数据生成器 — DeepSeek Flash API
+ * Innovus command simulation data generator — DeepSeek Flash API
  *
- * 功能:
- *   - 遍历命令 help JSON，调用 AI 生成 TCL proc 仿真包装器
- *   - 支持 cn/en 双语生成
- *   - 并发控制 + 限流重试 + 断点续传
- *   - 主日志 + 按 worker 分日志（最大 500 行滚动）
- *   - 增量生成：已有仿真数据自动跳过
+ * Features:
+ *   - Walks the command help JSON and asks the model for a TCL proc simulation wrapper
+ *   - Generates both the cn and en data sets
+ *   - Concurrency control + rate-limit retries + resumable runs
+ *   - A main log plus one log per worker (rolling, capped at 500 lines)
+ *   - Incremental: existing simulation data is skipped automatically
  *
- * 用法:
+ * Usage:
  *   node scripts/generate-simulations.mjs [--lang cn|en] [--limit N] [--concurrency N] [--dry-run]
- *   默认并发 30（deepseek-v4-flash 上限 2500）
+ *   Concurrency defaults to 30 (deepseek-v4-flash allows up to 2500)
  *
- * 环境变量:
+ * Environment:
  *   DEEPSEEK_API_KEY
  */
 
@@ -25,7 +25,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 
 // ════════════════════════════════════════════════════════════
-//  配置
+//  Configuration
 // ════════════════════════════════════════════════════════════
 
 const args = process.argv.slice(2);
@@ -40,13 +40,13 @@ const API = 'https://api.deepseek.com/chat/completions';
 const MODEL = 'deepseek-v4-flash';
 const CONCURRENCY = args.includes('--concurrency')
     ? parseInt(args[args.indexOf('--concurrency') + 1])
-    : 30;  // deepseek-v4-flash 并发上限 2500，30 安全快速
+    : 30;  // deepseek-v4-flash allows up to 2500 concurrent calls; 30 is fast and safe
 const RETRY_DELAY = 2000;
 const MAX_RETRIES = 3;
 const MAX_LOG_LINES = 500;
 
 // ════════════════════════════════════════════════════════════
-//  日志系统
+//  Logging
 // ════════════════════════════════════════════════════════════
 
 const LOG_DIR = path.join(ROOT, 'data', 'simulations', 'logs');
@@ -70,7 +70,7 @@ class Logger {
             ? fs.readFileSync(this.filePath, 'utf-8') : '';
         let lines = content.split('\n').filter(l => l.trim());
         lines.push(...this.buffer);
-        // 滚动：保持最近 MAX_LOG_LINES 行
+        // Rolling: keep only the most recent MAX_LOG_LINES lines
         if (lines.length > MAX_LOG_LINES) {
             lines = lines.slice(lines.length - MAX_LOG_LINES);
         }
@@ -86,7 +86,7 @@ for (let i = 0; i < CONCURRENCY; i++) {
 }
 
 // ════════════════════════════════════════════════════════════
-//  Prompt 模板
+//  Prompt templates
 // ════════════════════════════════════════════════════════════
 
 function buildPrompt(cmdInfo, lang) {
@@ -94,6 +94,8 @@ function buildPrompt(cmdInfo, lang) {
     const isVariable = (is_cmd === false);
 
     if (isVariable) {
+        // The cn prompts below stay in Chinese on purpose: they are what makes the
+        // model emit the Chinese simulation data set.
         if (lang === 'cn') {
             return {
                 system: '你是 Innovus EDA 仿真专家。只输出 TCL proc 代码，不输出解释。',
@@ -126,13 +128,13 @@ proc example_var {args} {
         };
     }
 
-    // 命令：格式化参数列表
+    // Commands: format the option list
     const optList = (options || []).map(o =>
         `  ${o.name} | ${o.type} | ${o.description || ''}`
     ).join('\n');
 
     if (lang === 'cn') {
-        // 读取 MD 文件作为 system prompt（完整规则）
+        // Read the MD file as the system prompt (it holds the full rule set)
         const promptFile = path.join(ROOT, 'prompts', 'cn', 'simulation-prompt.md');
         let systemPrompt = '';
         if (fs.existsSync(promptFile)) {
@@ -142,7 +144,7 @@ proc example_var {args} {
             systemPrompt = '你是 Innovus EDA 仿真专家。只输出 TCL proc 代码，不输出解释。';
         }
 
-        // User prompt: 命令数据
+        // User prompt: the command data
         const userPrompt = `为命令 "${command}" 生成仿真 proc。
 
 ## 命令基本信息
@@ -177,7 +179,7 @@ Follow the rules in the system prompt exactly.`;
 }
 
 // ════════════════════════════════════════════════════════════
-//  API 调用
+//  API calls
 // ════════════════════════════════════════════════════════════
 
 async function callAPI(systemPrompt, userPrompt, opts = {}) {
@@ -228,7 +230,7 @@ function extractProc(text) {
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // ════════════════════════════════════════════════════════════
-//  主流程
+//  Main flow
 // ════════════════════════════════════════════════════════════
 
 async function processLang(lang) {
@@ -237,12 +239,12 @@ async function processLang(lang) {
     fs.mkdirSync(simDir, { recursive: true });
 
     const files = fs.readdirSync(helpDir).filter(f => f.endsWith('.json')).sort();
-    // 如果指定了 --cmds，只处理这些命令
+    // With --cmds, only these commands are processed
     const filteredFiles = TARGET_CMDS
         ? files.filter(f => TARGET_CMDS.has(f.replace('help_', '').replace('.json', '')))
         : files;
     if (TARGET_CMDS) {
-        mainLog.log(`[${lang}] 目标命令: ${TARGET_CMDS.size} 个, 匹配到 ${filteredFiles.length} 个`);
+        mainLog.log(`[${lang}] target commands: ${TARGET_CMDS.size}, matched ${filteredFiles.length}`);
     }
     const total = LIMIT > 0 ? Math.min(LIMIT, filteredFiles.length) : filteredFiles.length;
 
@@ -251,14 +253,14 @@ async function processLang(lang) {
         'regexp', 'regsub', 'open', 'close', 'gets', 'read', 'file', 'glob', 'cd', 'pwd', 'exec', 'eval',
         'uplevel', 'upvar', 'namespace', 'variable', 'array', 'string', 'format', 'scan', 'clock', 'info']);
 
-    // 通过文件系统对比：已有仿真文件自动跳过
+    // Compare against the file system: existing simulation files are skipped
     const existingCount = files.filter(f => {
         const name = f.replace('help_', '').replace('.json', '');
         return fs.existsSync(path.join(simDir, `${name}.tcl`));
     }).length;
     const pendingCount = total - existingCount;
 
-    mainLog.log(`[${lang}] 总计 ${files.length} 命令, 处理 ${total}, 已有 ${existingCount}, 待生成 ${pendingCount}, 并发=${CONCURRENCY}`);
+    mainLog.log(`[${lang}] ${files.length} commands total, processing ${total}, ${existingCount} existing, ${pendingCount} to generate, concurrency=${CONCURRENCY}`);
 
     if (DRY_RUN) {
         const info = JSON.parse(fs.readFileSync(path.join(helpDir, files[0]), 'utf-8'));
@@ -273,22 +275,22 @@ async function processLang(lang) {
     const queue = filteredFiles.slice(0, total);
     let idx = 0;
 
-    // 预先统计跳过的文件数（.tcl 已存在 + 变体 + 内置命令）
+    // Count the skipped files up front (.tcl already present + variants + built-ins)
     let preSkipped = 0;
     for (const f of queue) {
         const name = f.replace('help_', '').replace('.json', '');
-        // 已有 .tcl 文件
+        // The .tcl file already exists
         if (fs.existsSync(path.join(simDir, `${name}.tcl`))) { preSkipped++; continue; }
-        // 变体条目（cmdName 含空格+数字后缀）
+        // Variant entry (the cmdName carries a space + numeric suffix)
         if (/\s+\d+$/.test(name)) { preSkipped++; continue; }
     }
     const needGenerate = total - preSkipped;
     if (preSkipped > 0) {
-        console.log(`[${lang}] 📦 跳过 ${preSkipped} 个 (已有文件 + 变体条目)`);
+        console.log(`[${lang}] 📦 skipping ${preSkipped} (existing files + variant entries)`);
     }
-    console.log(`[${lang}] 🔧 需生成 ${needGenerate} 个 (共 ${total})`);
+    console.log(`[${lang}] 🔧 ${needGenerate} to generate (${total} total)`);
 
-    // 进度条
+    // Progress bar
     const BAR_WIDTH = 30;
     let lastProgressLine = '';
     function progressBar(current, max) {
@@ -296,12 +298,12 @@ async function processLang(lang) {
         const filled = Math.round(current / max * BAR_WIDTH);
         const bar = '█'.repeat(filled) + '░'.repeat(BAR_WIDTH - filled);
         const el = ((Date.now() - t0) / 1000).toFixed(0);
-        return `[${bar}] ${pct}% 跳过${skipped} 生成${completed} 失败${failed} ${el}s`;
+        return `[${bar}] ${pct}% skipped ${skipped} generated ${completed} failed ${failed} ${el}s`;
     }
 
     function drawProgress(current, max) {
         const line = progressBar(current, max);
-        // 清除上一行并重绘（\r 回到行首，空格清除残留字符）
+        // Clear the previous line and redraw (\r returns to the start, spaces erase leftovers)
         if (lastProgressLine) {
             process.stdout.write('\r' + ' '.repeat(lastProgressLine.length) + '\r');
         }
@@ -309,7 +311,7 @@ async function processLang(lang) {
         lastProgressLine = line;
     }
 
-    // 定期刷新进度（每 3 秒）
+    // Refresh the progress every 3 seconds
     let progressTimer = setInterval(() => {
         const current = completed + skipped + failed;
         if (current > 0 && current < total) {
@@ -317,14 +319,14 @@ async function processLang(lang) {
         }
     }, 3000);
 
-    // 任何 worker 输出到控制台时，先换行再输出，然后重绘进度
+    // When a worker writes to the console, clear the progress line first, then redraw it
     function consoleLog(msg) {
-        // 清除当前进度行
+        // Clear the current progress line
         if (lastProgressLine) {
             process.stdout.write('\r' + ' '.repeat(lastProgressLine.length) + '\r');
         }
         console.log(msg);
-        // 重绘进度
+        // Redraw the progress
         const current = completed + skipped + failed;
         if (current > 0 && current < total) {
             drawProgress(current, total);
@@ -338,14 +340,14 @@ async function processLang(lang) {
             const cmdName = file.replace('help_', '').replace('.json', '');
             const simFile = path.join(simDir, `${cmdName}.tcl`);
 
-            // 跳过已有仿真文件（直接比对文件系统）
+            // Skip files that already have simulation data (checked against the file system)
             if (fs.existsSync(simFile)) {
                 skipped++;
                 continue;
             }
 
             try {
-                // 跳过变体条目（cmdName 含空格+数字后缀，如 "readSdpFile 2"）
+                // Skip variant entries (a cmdName with a space + numeric suffix, e.g. "readSdpFile 2")
                 if (/\s+\d+$/.test(cmdName)) {
                     skipped++;
                     continue;
@@ -353,7 +355,7 @@ async function processLang(lang) {
 
                 const info = JSON.parse(fs.readFileSync(path.join(helpDir, file), 'utf-8'));
 
-                // TCL 纯内置命令（非 Innovus 特有）直接跳过
+                // Skip pure TCL built-ins (they are not Innovus-specific)
                 if (TCL_BUILTINS.has(info.command) && info.is_cmd === false) {
                     skipped++;
                     continue;
@@ -361,13 +363,13 @@ async function processLang(lang) {
 
                 const { system, user } = buildPrompt(info, lang);
 
-                // 第一次尝试
+                // First attempt
                 let tcl = await callAPI(system, user);
                 let retried = false;
 
-                // 如果无 proc 或括号不匹配，重试
+                // Retry when there is no proc, or the braces do not balance
                 if (!tcl.includes('proc ')) {
-                    const msg = `🔁 [${lang}] ${cmdName}(${info.summary?.substring(0, 30)}) 无proc → 重试`;
+                    const msg = `🔁 [${lang}] ${cmdName}(${info.summary?.substring(0, 30)}) no proc → retrying`;
                     wl.log(msg); consoleLog(msg);
                     tcl = await callAPI(system, user, { temperature: 0.1, maxRetries: 1 });
                     retried = true;
@@ -377,16 +379,16 @@ async function processLang(lang) {
                     const openB = (tcl.match(/\{/g) || []).length;
                     const closeB = (tcl.match(/\}/g) || []).length;
                     if (openB !== closeB) {
-                        const msg = `🔁 [${lang}] ${cmdName}(${info.summary?.substring(0, 30)}) {${openB}/}${closeB} → 重试`;
+                        const msg = `🔁 [${lang}] ${cmdName}(${info.summary?.substring(0, 30)}) {${openB}/}${closeB} → retrying`;
                         wl.log(msg); consoleLog(msg);
                         tcl = await callAPI(system, user, { temperature: 0.1, maxRetries: 1 });
                         retried = true;
                     }
                 }
 
-                // 最终验证
+                // Final validation
                 if (!tcl.includes('proc ')) {
-                    const msg = `⚠ [${lang}] ${cmdName}(${info.summary?.substring(0, 40)}) 重试${retried ? '后' : ''}仍无proc`;
+                    const msg = `⚠ [${lang}] ${cmdName}(${info.summary?.substring(0, 40)}) still has no proc${retried ? ' after the retry' : ''}`;
                     wl.log(msg); consoleLog(msg);
                     failed++;
                     continue;
@@ -395,7 +397,7 @@ async function processLang(lang) {
                 const openBraces = (tcl.match(/\{/g) || []).length;
                 const closeBraces = (tcl.match(/\}/g) || []).length;
                 if (openBraces !== closeBraces) {
-                    const msg = `⚠ [${lang}] ${cmdName}(${info.summary?.substring(0, 40)}) 重试${retried ? '后' : ''}括号{${openBraces}/}${closeBraces}`;
+                    const msg = `⚠ [${lang}] ${cmdName}(${info.summary?.substring(0, 40)}) unbalanced braces {${openBraces}/}${closeBraces}${retried ? ' after the retry' : ''}`;
                     wl.log(msg); consoleLog(msg);
                     failed++;
                     continue;
@@ -405,19 +407,19 @@ async function processLang(lang) {
 
                 completed++;
 
-                // 成功详情写入 worker log（每 50 条写一次）
+                // Write the success details to the worker log (every 50 entries)
                 if (completed % 50 === 0) {
-                    wl.log(`✅ [${lang}] ${cmdName}(${info.summary?.substring(0, 40)}) 已完成`);
+                    wl.log(`✅ [${lang}] ${cmdName}(${info.summary?.substring(0, 40)}) done`);
                 }
 
-                // 每 50 条更新进度条
+                // Update the progress bar every 50 entries
                 if (completed % 50 === 0) {
                     drawProgress(completed + skipped + failed, total);
-                    mainLog.log(`[${lang}] ${progressBar(completed + skipped + failed, total)} 最近: ${cmdName}`);
+                    mainLog.log(`[${lang}] ${progressBar(completed + skipped + failed, total)} latest: ${cmdName}`);
                 }
 
             } catch (e) {
-                const msg = `❌ [${lang}] ${cmdName} 异常: ${e.message.substring(0, 100)}`;
+                const msg = `❌ [${lang}] ${cmdName} exception: ${e.message.substring(0, 100)}`;
                 wl.log(msg); consoleLog(msg);
                 failed++;
             }
@@ -425,13 +427,13 @@ async function processLang(lang) {
         wl.flush();
     }
 
-    // 并发执行
+    // Run the workers concurrently
     const workerCount = Math.min(CONCURRENCY, queue.length);
     await Promise.all(Array(workerCount).fill(null).map((_, i) => worker(i)));
 
-    // 最终保存
+    // Final flush
     if (progressTimer) clearInterval(progressTimer);
-    // 清除进度行并打印完成行
+    // Clear the progress line and print the completion line
     if (lastProgressLine) {
         process.stdout.write('\r' + ' '.repeat(lastProgressLine.length) + '\r');
     }
@@ -442,28 +444,28 @@ async function processLang(lang) {
     const el = ((Date.now() - t0) / 1000).toFixed(0);
     mainLog.log(`[${lang}] ✅${completed} ⏭${skipped} ❌${failed} (${el}s)`);
     if (failed > 0) {
-        mainLog.log(`[${lang}] 💡 ${failed} 个失败详见 worker-*.log，下次运行自动重试`);
+        mainLog.log(`[${lang}] 💡 ${failed} failures — see worker-*.log; the next run retries them automatically`);
     }
 }
 
 
 async function main() {
     mainLog.log('═══════════════════════════════════════');
-    mainLog.log(`启动: 语言=${LANGS.join(',')} 并发=${CONCURRENCY} 限制=${LIMIT || '无'}`);
-    mainLog.log(`日志: ${LOG_DIR}`);
-    mainLog.log(`模式: 文件系统对比（已有仿真自动跳过）`);
+    mainLog.log(`Starting: languages=${LANGS.join(',')} concurrency=${CONCURRENCY} limit=${LIMIT || 'none'}`);
+    mainLog.log(`Logs: ${LOG_DIR}`);
+    mainLog.log(`Mode: file-system comparison (existing simulations are skipped)`);
 
     for (const lang of LANGS) {
         await processLang(lang);
     }
 
     mainLog.log('═══════════════════════════════════════');
-    mainLog.log('全部完成');
+    mainLog.log('All done');
     mainLog.flush();
 }
 
 main().catch(e => {
-    mainLog.log(`❌ 致命错误: ${e.message}`);
+    mainLog.log(`❌ Fatal error: ${e.message}`);
     mainLog.flush();
     process.exit(1);
 });
